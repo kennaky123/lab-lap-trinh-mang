@@ -29,49 +29,61 @@ public class Pop3Client {
     }
 
     /**
-     * Lấy danh sách thư từ Localhost Mail Server
+     * Lấy danh sách thư từ Localhost / LAN Mail Server
      */
     public List<EmailMessage> fetchLocalEmails(String host, int port, String user, String pass) {
         List<EmailMessage> emails = new ArrayList<>();
-        try (Socket socket = new Socket(host, port);
-             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
-
-            socket.setSoTimeout(15000);
-
-            String resp = readLine(reader);
-            if (!resp.startsWith("+OK")) return emails;
-
-            sendCmd(writer, "USER " + user);
-            resp = readLine(reader);
-            if (!resp.startsWith("+OK")) return emails;
-
-            sendCmd(writer, "PASS " + pass);
-            resp = readLine(reader);
-            if (!resp.startsWith("+OK")) return emails;
-
-            // Đếm số lượng thư (STAT)
-            sendCmd(writer, "STAT");
-            resp = readLine(reader);
-            String[] parts = resp.split(" ");
-            int count = parts.length >= 2 ? Integer.parseInt(parts[1]) : 0;
-
-            // Lấy nội dung từng thư (RETR 1, RETR 2, ...)
-            for (int i = 1; i <= count; i++) {
-                sendCmd(writer, "RETR " + i);
-                resp = readLine(reader);
-                if (resp.startsWith("+OK")) {
-                    EmailMessage msg = parseEmailContent(reader);
-                    if (msg != null) {
-                        emails.add(msg);
-                    }
+        Socket socket = null;
+        try {
+            try {
+                socket = new Socket(host, port);
+            } catch (IOException firstEx) {
+                if (port == MailConfig.LOCAL_POP3_PORT) {
+                    socket = new Socket(host, MailConfig.FALLBACK_POP3_PORT);
+                } else {
+                    throw firstEx;
                 }
             }
+            try (Socket s = socket;
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))) {
 
-            sendCmd(writer, "QUIT");
-            readLine(reader);
+                s.setSoTimeout(15000);
+
+                String resp = readLine(reader);
+                if (!resp.startsWith("+OK")) return emails;
+
+                sendCmd(writer, "USER " + user);
+                resp = readLine(reader);
+                if (!resp.startsWith("+OK")) return emails;
+
+                sendCmd(writer, "PASS " + pass);
+                resp = readLine(reader);
+                if (!resp.startsWith("+OK")) return emails;
+
+                // Đếm số lượng thư (STAT)
+                sendCmd(writer, "STAT");
+                resp = readLine(reader);
+                String[] parts = resp.split(" ");
+                int count = parts.length >= 2 ? Integer.parseInt(parts[1]) : 0;
+
+                // Lấy nội dung từng thư (RETR 1, RETR 2, ...)
+                for (int i = 1; i <= count; i++) {
+                    sendCmd(writer, "RETR " + i);
+                    resp = readLine(reader);
+                    if (resp.startsWith("+OK")) {
+                        EmailMessage msg = parseEmailContent(reader);
+                        if (msg != null) {
+                            emails.add(msg);
+                        }
+                    }
+                }
+
+                sendCmd(writer, "QUIT");
+                readLine(reader);
+            }
         } catch (Exception e) {
-            logResp("Lỗi nhận thư Localhost: " + e.getMessage());
+            logResp("Lỗi nhận thư (" + host + ":" + port + "): " + e.getMessage());
         }
         return emails;
     }

@@ -57,11 +57,11 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
                 new EmptyBorder(12, 16, 12, 16)
         ));
 
-        JLabel titleLabel = new JLabel("BẢNG ĐIỀU KHIỂN MAIL SERVER (SMTP & POP3 DASHBOARD)");
-        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        JLabel titleLabel = new JLabel("BẢNG ĐIỀU KHIỂN MAIL SERVER (SMTP & POP3)");
+        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 15));
         titleLabel.setForeground(new Color(217, 48, 37)); // Màu đỏ phong cách Gmail
 
-        JPanel ctrlPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel ctrlPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         ctrlPanel.setOpaque(false);
 
         ctrlPanel.add(new JLabel("SMTP Port:"));
@@ -75,6 +75,8 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         startBtn = new JButton("Khởi Động Server");
         startBtn.setBackground(new Color(40, 167, 69));
         startBtn.setForeground(Color.WHITE);
+        startBtn.setContentAreaFilled(false);
+        startBtn.setOpaque(true);
         startBtn.setFocusPainted(false);
         startBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         startBtn.addActionListener(e -> startServer());
@@ -83,6 +85,8 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         stopBtn = new JButton("Dừng Server");
         stopBtn.setBackground(new Color(220, 53, 69));
         stopBtn.setForeground(Color.WHITE);
+        stopBtn.setContentAreaFilled(false);
+        stopBtn.setOpaque(true);
         stopBtn.setFocusPainted(false);
         stopBtn.setEnabled(false);
         stopBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
@@ -199,6 +203,10 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         loadAccountsToTable();
         loadEmailsToTable();
         loadLogsToTable();
+        onStatsUpdated(
+                MailDatabaseManager.getInstance().getAllAccounts().size(),
+                MailDatabaseManager.getInstance().getTotalEmailCount()
+        );
     }
 
     private JLabel createStatCard(String title, String value, Color color) {
@@ -230,13 +238,17 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         server.addListener(this);
 
         if (server.start()) {
+            int actualSmtp = server.getSmtpPort();
+            int actualPop3 = server.getPop3Port();
+            smtpPortField.setText(String.valueOf(actualSmtp));
+            pop3PortField.setText(String.valueOf(actualPop3));
             startBtn.setEnabled(false);
             stopBtn.setEnabled(true);
             smtpPortField.setEditable(false);
             pop3PortField.setEditable(false);
             statusLabel.setText("<html><div style='text-align: center; padding: 6px;'>"
                     + "<span style='font-size: 10px; color: #555555;'>Trạng Thái Máy Chủ</span><br>"
-                    + "<b style='font-size: 13px; color: #28a745;'>Đang Chạy (SMTP " + smtpPort + " / POP3 " + pop3Port + ")</b></div></html>");
+                    + "<b style='font-size: 13px; color: #28a745;'>Đang Chạy (SMTP " + actualSmtp + " / POP3 " + actualPop3 + ")</b></div></html>");
         }
     }
 

@@ -11,6 +11,10 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.File;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -125,10 +129,16 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         modeComboBox.addActionListener(e -> switchAccountMode());
         accountPanel.add(modeComboBox);
 
-        currentAccountLabel = new JLabel("Tài khoản: " + currentUser);
+        currentAccountLabel = new JLabel("Tài khoản: " + currentUser + " (" + serverHost + ")");
         currentAccountLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
         currentAccountLabel.setForeground(new Color(26, 115, 232));
         accountPanel.add(currentAccountLabel);
+
+        JButton discoverLanBtn = new JButton("Tìm IP LAN");
+        discoverLanBtn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        discoverLanBtn.setToolTipText("Tự động tìm IP máy chủ Mail Server trong cùng mạng Wi-Fi");
+        discoverLanBtn.addActionListener(e -> discoverMailServerInLan(null, null, null));
+        accountPanel.add(discoverLanBtn);
 
         JButton refreshBtn = new JButton("Làm Mới / Nhận Thư");
         refreshBtn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
@@ -476,6 +486,8 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         JButton sendBtn = new JButton("Gửi Thư (Send)");
         sendBtn.setBackground(new Color(26, 115, 232));
         sendBtn.setForeground(Color.WHITE);
+        sendBtn.setContentAreaFilled(false);
+        sendBtn.setOpaque(true);
         sendBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         sendBtn.setFocusPainted(false);
         sendBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
@@ -558,7 +570,7 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         }
         currentFolder = "INBOX";
         setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
-        currentAccountLabel.setText("Tài khoản: " + currentUser);
+        currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
         refreshInbox();
     }
 
@@ -579,11 +591,16 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
 
     private void startAutoRefreshTimer() {
         lastKnownEmailsModTime = getEmailsFileModTime();
-        Timer timer = new Timer(1500, e -> {
+        Timer timer = new Timer(2500, e -> {
             if (!isGmailMode) {
-                long mod = getEmailsFileModTime();
-                if (mod > lastKnownEmailsModTime) {
-                    lastKnownEmailsModTime = mod;
+                boolean isLocal = "localhost".equalsIgnoreCase(serverHost) || "127.0.0.1".equals(serverHost);
+                if (isLocal) {
+                    long mod = getEmailsFileModTime();
+                    if (mod > lastKnownEmailsModTime) {
+                        lastKnownEmailsModTime = mod;
+                        refreshInbox();
+                    }
+                } else {
                     refreshInbox();
                 }
             }
@@ -598,6 +615,67 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         File f2 = new File("lap-trinh-mang/mail-swing-app/mail_data/emails.dat");
         if (f2.exists()) return f2.lastModified();
         return 0L;
+    }
+
+    private void discoverMailServerInLan(JTextField hostF, JTextField smtpF, JTextField pop3F) {
+        statusLabel.setText("Đang dò tìm Mail Server trong mạng Wi-Fi (LAN)...");
+        new Thread(() -> {
+            String foundIp = null;
+            int foundSmtp = smtpPort;
+            int foundPop3 = pop3Port;
+            try (DatagramSocket socket = new DatagramSocket()) {
+                socket.setBroadcast(true);
+                socket.setSoTimeout(2000);
+                byte[] req = "DISCOVER_MAIL_SERVER_REQUEST".getBytes(StandardCharsets.UTF_8);
+                DatagramPacket packet = new DatagramPacket(
+                        req, req.length,
+                        InetAddress.getByName("255.255.255.255"),
+                        MailConfig.UDP_DISCOVERY_PORT
+                );
+                socket.send(packet);
+
+                byte[] buf = new byte[256];
+                DatagramPacket resp = new DatagramPacket(buf, buf.length);
+                socket.receive(resp);
+                String msg = new String(resp.getData(), 0, resp.getLength(), StandardCharsets.UTF_8).trim();
+                if (msg.startsWith("MAIL_SERVER_DISCOVERED")) {
+                    foundIp = resp.getAddress().getHostAddress();
+                    String[] parts = msg.split(":");
+                    if (parts.length >= 3) {
+                        try {
+                            foundSmtp = Integer.parseInt(parts[1].trim());
+                            foundPop3 = Integer.parseInt(parts[2].trim());
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+
+            final String ip = foundIp;
+            final int sPort = foundSmtp;
+            final int pPort = foundPop3;
+            SwingUtilities.invokeLater(() -> {
+                if (ip != null) {
+                    serverHost = ip;
+                    smtpPort = sPort;
+                    pop3Port = pPort;
+                    if (hostF != null) hostF.setText(ip);
+                    if (smtpF != null) smtpF.setText(String.valueOf(sPort));
+                    if (pop3F != null) pop3F.setText(String.valueOf(pPort));
+                    currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
+                    statusLabel.setText("Đã tìm thấy Mail Server tại " + ip + " (SMTP " + sPort + " / POP3 " + pPort + ")");
+                    JOptionPane.showMessageDialog(this,
+                            "Đã tìm thấy Mail Server trong mạng LAN!\nIP: " + ip + "\nSMTP Port: " + sPort + "\nPOP3 Port: " + pPort,
+                            "Tìm IP LAN Thành Công", JOptionPane.INFORMATION_MESSAGE);
+                    refreshInbox();
+                } else {
+                    statusLabel.setText("Không tìm thấy Mail Server tự động.");
+                    JOptionPane.showMessageDialog(this,
+                            "Không tìm thấy Mail Server tự động qua UDP.\nHãy nhập trực tiếp địa chỉ IP LAN hiện trên màn hình Log của Mail Server.",
+                            "Thông Báo", JOptionPane.WARNING_MESSAGE);
+                }
+            });
+        }, "Mail-LAN-Discovery").start();
     }
 
     private void promptGmailLogin() {
@@ -627,13 +705,20 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         JTextField smtpF = new JTextField(String.valueOf(smtpPort));
         JTextField pop3F = new JTextField(String.valueOf(pop3Port));
 
+        JButton findLanBtn = new JButton("Tìm IP LAN");
+        findLanBtn.addActionListener(e -> discoverMailServerInLan(hostF, smtpF, pop3F));
+
+        JPanel hostPanel = new JPanel(new BorderLayout(4, 0));
+        hostPanel.add(hostF, BorderLayout.CENTER);
+        hostPanel.add(findLanBtn, BorderLayout.EAST);
+
         JPanel p = new JPanel(new GridLayout(5, 2, 6, 6));
         p.add(new JLabel("Tài khoản Email:"));
         p.add(uField);
         p.add(new JLabel("Mật khẩu:"));
         p.add(pField);
-        p.add(new JLabel("Server Host:"));
-        p.add(hostF);
+        p.add(new JLabel("Server Host (IP):"));
+        p.add(hostPanel);
         p.add(new JLabel("SMTP Port:"));
         p.add(smtpF);
         p.add(new JLabel("POP3 Port:"));
@@ -655,7 +740,7 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
             } catch (Exception ignored) {}
             currentFolder = "INBOX";
             setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
-            currentAccountLabel.setText("Tài khoản: " + currentUser);
+            currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
             syncModeComboBox();
             refreshInbox();
         }
