@@ -84,4 +84,9 @@ Hệ thống sẽ:
 4. **Kiểm tra Lịch Sử (History) & Điều hướng:**
    - Thử bấm nút ◀ Back và ▶ Forward trên thanh điều hướng để xem chuyển trang theo Stack.
    - Mở tab **📜 Lịch Sử Duyệt Web** để xem toàn bộ danh sách các trang đã truy cập.
+5. **Kiểm tra Truy Cập Qua Mạng LAN & Tự Động Dò Tìm IP:**
+   - Khi chạy trên 2 máy tính / điện thoại trong cùng mạng Wi-Fi:
+     + **Web Server:** Hiển thị trực quan địa chỉ IP LAN thực tế ngay trong khung log khi khởi động (ví dụ: `http://192.168.1.15:8080/`).
+     + **Web Browser (máy 2):** Bấm nút **Tìm IP LAN** trên thanh điều hướng để tự động dò tìm qua UDP Broadcast và chuyển trang ngay lập tức (hoặc nhập trực tiếp `http://<IP_LAN>:8080/`).
+     + Tải tệp đa dịch vụ (.pdf, .mp3, .mp4) và gửi form POST đều hoạt động liền mạch qua mạng LAN nhờ cơ chế tự động giải quyết domain gốc (`getBaseOrigin()`).
 
