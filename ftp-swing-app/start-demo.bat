@@ -1,5 +1,7 @@
 @echo off
 chcp 65001 > nul
+cd /d "%~dp0"
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "PATH=%JAVA_HOME%\bin;%PATH%"
 echo =====================================================================
 echo    KHỞI CHẠY DEMO ĐÁNH GIÁ CHẤM ĐIỂM (1 FTP SERVER + 1 FTP CLIENT)
 echo    Đề bài: FTP Server (có Database) + FTP Client (Tương tự FileZilla)

@@ -1,5 +1,7 @@
 @echo off
 chcp 65001 > nul
+cd /d "%~dp0"
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "PATH=%JAVA_HOME%\bin;%PATH%"
 echo =====================================================================
 echo    KHỞI CHẠY DEMO ĐÁNH GIÁ CHẤM ĐIỂM (MAIL SERVER + GMAIL CLIENT)
 echo    Đề bài: Có giao thức POP3 và SMTP - Gửi được trên Gmail và Localhost

@@ -1,5 +1,7 @@
 @echo off
 chcp 65001 > nul
+cd /d "%~dp0"
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "PATH=%JAVA_HOME%\bin;%PATH%"
 echo ===================================================
 echo Đang khởi động MÁY CHỦ WEB SERVER (HTTP/1.1)...
 echo ===================================================
