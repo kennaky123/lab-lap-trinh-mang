@@ -235,6 +235,10 @@ public class WebBrowserGUI extends JFrame {
                     String postTarget = (formUrl != null) ? formUrl.toString() : getBaseOrigin() + "/submit-feedback";
                     if (postTarget.startsWith("/")) {
                         postTarget = getBaseOrigin() + postTarget;
+                    } else if (postTarget.startsWith("http://localhost:8080")) {
+                        postTarget = getBaseOrigin() + postTarget.substring("http://localhost:8080".length());
+                    } else if (postTarget.startsWith("http://127.0.0.1:8080")) {
+                        postTarget = getBaseOrigin() + postTarget.substring("http://127.0.0.1:8080".length());
                     }
                     if (FormSubmitEvent.MethodType.POST.equals(fse.getMethod())) {
                         handleFormPost(postTarget, fse.getData());
@@ -247,6 +251,10 @@ public class WebBrowserGUI extends JFrame {
                 if (urlStr != null) {
                     if (urlStr.startsWith("/")) {
                         urlStr = getBaseOrigin() + urlStr;
+                    } else if (urlStr.startsWith("http://localhost:8080")) {
+                        urlStr = getBaseOrigin() + urlStr.substring("http://localhost:8080".length());
+                    } else if (urlStr.startsWith("http://127.0.0.1:8080")) {
+                        urlStr = getBaseOrigin() + urlStr.substring("http://127.0.0.1:8080".length());
                     }
                     checkAndDownloadOrNavigate(urlStr);
                 }
@@ -287,6 +295,11 @@ public class WebBrowserGUI extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     currentUrl = targetUrl;
                     addressBar.setText(currentUrl);
+                    try {
+                        if (webPane.getDocument() instanceof HTMLDocument) {
+                            ((HTMLDocument) webPane.getDocument()).setBase(new URL(getBaseOrigin() + "/"));
+                        }
+                    } catch (Exception ignored) {}
                     webPane.setText(res.body);
                     webPane.setCaretPosition(0);
                     recordHistory(currentUrl, "HTTP POST Response");

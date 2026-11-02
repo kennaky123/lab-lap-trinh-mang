@@ -60,10 +60,17 @@ public class HttpClientEngine {
         return executeRequest(urlString, "POST", postData, contentType);
     }
 
+    private boolean isLocalOrLanHost(String host) {
+        if (host == null) return false;
+        String h = host.toLowerCase();
+        return h.equals("localhost") || h.equals("127.0.0.1")
+                || h.startsWith("192.168.") || h.startsWith("10.") || h.startsWith("172.");
+    }
+
     private HttpResult executeRequest(String urlString, String method, String postData, String contentType) throws Exception {
         URL url = new URL(urlString);
         String host = url.getHost() != null ? url.getHost().toLowerCase() : "";
-        HttpURLConnection conn = (host.equals("localhost") || host.equals("127.0.0.1"))
+        HttpURLConnection conn = isLocalOrLanHost(host)
                 ? (HttpURLConnection) url.openConnection(Proxy.NO_PROXY)
                 : (HttpURLConnection) url.openConnection();
         conn.setUseCaches(false);
@@ -117,7 +124,7 @@ public class HttpClientEngine {
         try {
             URL url = new URL(urlString);
             String host = url.getHost() != null ? url.getHost().toLowerCase() : "";
-            HttpURLConnection conn = (host.equals("localhost") || host.equals("127.0.0.1"))
+            HttpURLConnection conn = isLocalOrLanHost(host)
                     ? (HttpURLConnection) url.openConnection(Proxy.NO_PROXY)
                     : (HttpURLConnection) url.openConnection();
             conn.setUseCaches(false);
