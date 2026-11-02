@@ -1,0 +1,3 @@
+Đây là tệp tin tài liệu từ máy Client.
+Sẵn sàng để thử nghiệm Tải lên (Upload / STOR) lên FTP Server.
+

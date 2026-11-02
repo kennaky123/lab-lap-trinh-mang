@@ -1,0 +1,15 @@
+quản lý xe ô tô và xe máy
+điểm chung:
+vehicle ID
+loại xe
+biển số xe
+mẫu xe
+hãng xe
+năm sản xuất
+
+quản lý khách hàng:
+CustomerID
+FullName 
+Phone 
+Address 
+

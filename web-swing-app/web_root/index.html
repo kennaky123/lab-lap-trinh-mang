@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Cổng Thông Tin Dịch Vụ - Web Server HTTP/1.1</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f6f9; color: #333333; }
+        .header-box { background-color: #1a73e8; color: #ffffff; padding: 24px 20px; text-align: center; }
+        h1 { margin: 0; font-size: 24px; color: #ffffff; }
+        p.subtitle { margin-top: 8px; font-size: 14px; color: #e8f0fe; }
+        .container { margin: 20px 30px; }
+        .card { background-color: #ffffff; border: 1px solid #dce1e8; padding: 18px; margin-bottom: 18px; }
+        .card h2 { margin-top: 0; color: #1a73e8; border-bottom: 2px solid #e8f0fe; padding-bottom: 6px; font-size: 18px; }
+        .service-box { border: 1px solid #e0e0e0; padding: 14px; background-color: #fafafa; }
+        .service-box h3 { margin-top: 0; font-size: 15px; color: #202124; }
+        .btn { display: inline-block; background-color: #1a73e8; color: #ffffff; padding: 7px 14px; text-decoration: none; font-weight: bold; }
+        .btn-green { background-color: #28a745; color: #ffffff; padding: 7px 14px; text-decoration: none; font-weight: bold; }
+        .btn-orange { background-color: #e67e22; color: #ffffff; padding: 7px 14px; text-decoration: none; font-weight: bold; }
+        .footer-box { text-align: center; padding: 14px; font-size: 12px; color: #666666; }
+    </style>
+</head>
+<body>
+    <div class="header-box">
+        <h1>MÁY CHỦ WEB ĐA DỊCH VỤ (HTTP/1.1 SERVER)</h1>
+        <p class="subtitle">Môn học: Lập Trình Mạng — Hỗ trợ GET, HEAD, POST &amp; Đa Phương Tiện (.pdf, .mp3, .mp4)</p>
+    </div>
+
+    <div class="container">
+        <!-- Danh sách dịch vụ đa phương tiện -->
+        <div class="card">
+            <h2>1. Các Dịch Vụ Đa Phương Tiện Của Server (.PDF, .MP3, .MP4)</h2>
+            <table width="100%" cellspacing="10" cellpadding="0" border="0">
+                <tr>
+                    <td width="33%" valign="top" class="service-box">
+                        <h3>[PDF] Dịch Vụ Tài Liệu (.pdf)</h3>
+                        <p>Phục vụ tài liệu PDF học tập môn Lập trình mạng. Hỗ trợ tải về máy và mở trực tiếp.</p>
+                        <p><a href="/docs/TaiLieu_LapTrinhMang.pdf" class="btn">Tải Tệp PDF Về Máy</a></p>
+                    </td>
+                    <td width="33%" valign="top" class="service-box">
+                        <h3>[MP3] Dịch Vụ Âm Thanh (.mp3)</h3>
+                        <p>Phục vụ luồng phát âm thanh trực tiếp (Audio Stream) và tải tệp nhạc đa phương tiện.</p>
+                        <p><a href="/assets/media/sample_audio.mp3" class="btn-green">Tải / Nghe Tệp MP3</a></p>
+                    </td>
+                    <td width="34%" valign="top" class="service-box">
+                        <h3>[MP4] Dịch Vụ Video (.mp4)</h3>
+                        <p>Phục vụ phát video số hóa chất lượng cao và tải tệp video đa phương tiện về máy.</p>
+                        <p><a href="/assets/media/sample_video.mp4" class="btn-orange">Tải / Xem Video MP4</a></p>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Form thử nghiệm phương thức HTTP POST -->
+        <div class="card">
+            <h2>2. Kiểm Tra Phương Thức HTTP POST (Feedback / Form Submit)</h2>
+            <p>Nhập thông tin bên dưới để gửi dữ liệu lên Server qua giao thức <b>HTTP POST</b>:</p>
+            <form action="http://localhost:8080/submit-feedback" method="POST">
+                <table width="100%" cellpadding="4" cellspacing="0" border="0">
+                    <tr>
+                        <td width="220"><b>Họ và Tên sinh viên:</b></td>
+                        <td><input type="text" name="student_name" value="Nguyễn Văn A" size="45"></td>
+                    </tr>
+                    <tr>
+                        <td><b>Mã số sinh viên (MSSV):</b></td>
+                        <td><input type="text" name="student_id" value="20210001" size="45"></td>
+                    </tr>
+                    <tr>
+                        <td valign="top"><b>Nội dung phản hồi:</b></td>
+                        <td><input type="text" name="content" value="Gửi yêu cầu HTTP POST thử nghiệm lên Web Server thành công!" size="60"></td>
+                    </tr>
+                    <tr>
+                        <td></td>
+                        <td><input type="submit" value="Gửi Dữ Liệu Lên Server (HTTP POST)"></td>
+                    </tr>
+                </table>
+            </form>
+        </div>
+
+        <!-- Hướng dẫn kiểm tra phương thức HTTP HEAD -->
+        <div class="card">
+            <h2>3. Kiểm Tra Phương Thức HTTP GET / HEAD / POST</h2>
+            <p>- <b>GET:</b> Nhận toàn bộ Header và Body tài nguyên của trang web hoặc tải tệp đa dịch vụ.</p>
+            <p>- <b>HEAD:</b> Chỉ nhận các dòng Header (Status Code, Content-Type, Content-Length) mà không tải Body.</p>
+            <p>- <b>POST:</b> Đẩy dữ liệu Form từ Client lên Server và lưu vào bảng <i>Dữ Liệu Nhận Từ HTTP POST</i> trên Server.</p>
+        </div>
+    </div>
+
+    <div class="footer-box">
+        Bài tập lớn Lập trình mạng — Java Swing Web Server &amp; Chrome / Cốc Cốc Browser Client
+    </div>
+</body>
+</html>
