@@ -74,7 +74,7 @@ Hệ thống sẽ tự động mở cùng lúc:
    - Bật lại Server 1 (bằng file `run-server1.bat`).
    - Server 1 khởi động lên, phát hiện Server 2 đang chạy ➔ Tự động kích hoạt cơ chế **Catch-up Sync** kéo toàn bộ bản ghi `SV102` về CSDL của Server 1.
 4. **Triển khai trên 2 máy tính thực tế và các máy ảo (theo yêu cầu đề bài):**
-   - **Máy thực 1:** Chạy lệnh `java -cp bin rmi.server.RmiServerGUI 1 <IP_Máy_Thực_2> 1100`
-   - **Máy thực 2:** Chạy lệnh `java -cp bin rmi.server.RmiServerGUI 2 <IP_Máy_Thực_1> 1099`
-   - **Máy ảo:** Mở Client ➔ Bấm nút **⚙ Đổi IP Máy Chủ** ➔ Nhập IP của Máy thực 1 và Máy thực 2.
+   - **Tự động nhận diện IP LAN:** Khi khởi động, RMI Server tự phát hiện card mạng LAN thực tế và hiển thị ngay trên thanh tiêu đề (ví dụ: `IP LAN: 192.168.1.15:1099`), đồng thời tự thiết lập `java.rmi.server.hostname` và ghim cổng RMI UnicastRemoteObject để không bị tường lửa Windows chặn.
+   - **Cấu hình Server đối tác linh hoạt:** Bấm nút **⚙ Đổi IP Đối Tác** trên thanh công cụ của Server để thay đổi IP Server còn lại ngay khi đang chạy mà không cần gõ lệnh.
+   - **Client dò tìm Server tự động:** Trên Client, chỉ cần bấm **Tìm IP LAN**, Client sẽ gửi gói tin UDP Broadcast tìm Server trong mạng nội bộ và tự điền IP kết nối; hoặc bấm **⚙ Đổi IP Máy Chủ** để nhập thủ công IP máy thực 1 và máy thực 2.
 
