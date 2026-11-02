@@ -8,7 +8,7 @@ echo ===================================================
 
 if not exist bin\mail\server\MailServerGUI.class (
     echo [THÔNG BÁO] Đang biên dịch mã nguồn...
-    javac -encoding UTF-8 -d bin src/mail/common/*.java src/mail/server/*.java src/mail/client/*.java src/mail/ui/*.java
+    javac --release 11 -encoding UTF-8 -d bin src/mail/common/*.java src/mail/server/*.java src/mail/client/*.java src/mail/ui/*.java
 )
 
 start "Mail Server Dashboard" java -Dfile.encoding=UTF-8 -cp bin mail.server.MailServerGUI

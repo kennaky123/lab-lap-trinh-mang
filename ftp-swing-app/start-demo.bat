@@ -13,7 +13,7 @@ if not exist server_root mkdir server_root
 if not exist client_local mkdir client_local
 
 echo [1/4] Đang kiểm tra và biên dịch mã nguồn Java...
-javac -encoding UTF-8 -d bin src/ftp/common/*.java src/ftp/server/*.java src/ftp/client/*.java src/ftp/ui/*.java
+javac --release 11 -encoding UTF-8 -d bin src/ftp/common/*.java src/ftp/server/*.java src/ftp/client/*.java src/ftp/ui/*.java
 
 echo [2/4] Khởi động FTP Server Dashboard...
 start "FTP Server Dashboard" java -Dfile.encoding=UTF-8 -cp bin ftp.server.FtpServerGUI

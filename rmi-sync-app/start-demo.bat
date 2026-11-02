@@ -13,7 +13,7 @@ if not exist server1_data mkdir server1_data
 if not exist server2_data mkdir server2_data
 
 echo [1/5] Đang kiểm tra và biên dịch mã nguồn Java...
-javac -encoding UTF-8 -d bin src/rmi/common/*.java src/rmi/server/*.java src/rmi/client/*.java src/rmi/ui/*.java
+javac --release 11 -encoding UTF-8 -d bin src/rmi/common/*.java src/rmi/server/*.java src/rmi/client/*.java src/rmi/ui/*.java
 
 echo [2/5] Khởi động RMI Server 1 (Cổng 1099)...
 start "RMI Server 1 (Port 1099)" java -Dfile.encoding=UTF-8 -cp bin rmi.server.RmiServerGUI 1 localhost 1100

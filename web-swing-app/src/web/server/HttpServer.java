@@ -4,9 +4,8 @@ import web.common.HttpConstants;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketException;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,8 +63,11 @@ public class HttpServer {
         }
     }
 
+    public static final int UDP_DISCOVERY_PORT = 8081;
+
     private final int port;
     private ServerSocket serverSocket;
+    private DatagramSocket discoverySocket;
     private boolean isRunning = false;
     private ExecutorService threadPool;
 
@@ -95,22 +97,82 @@ public class HttpServer {
             File root = new File(HttpConstants.WEB_ROOT);
             if (!root.exists()) root.mkdirs();
 
-            serverSocket = new ServerSocket(port);
+            serverSocket = new ServerSocket();
+            serverSocket.setReuseAddress(true);
+            serverSocket.bind(new InetSocketAddress(port));
             threadPool = Executors.newCachedThreadPool();
             isRunning = true;
 
+            String lanIp = getLocalLanIp();
             log(">>> [WEB SERVER HTTP/1.1 ĐÃ KHỞI ĐỘNG THÀNH CÔNG]");
-            log(">>> Cổng dịch vụ: http://localhost:" + port + "/");
+            log(">>> Cổng dịch vụ cục bộ: http://localhost:" + port + "/");
+            log(">>> Địa chỉ IP LAN (truy cập từ máy thứ 2 cùng Wi-Fi): http://" + lanIp + ":" + port + "/");
             log(">>> Thư mục gốc tài nguyên: " + root.getAbsolutePath());
             log(">>> Hỗ trợ đa dịch vụ: Trang Web (.html), Tài liệu (.pdf), Âm thanh (.mp3), Video (.mp4)");
             log(">>> Hỗ trợ các phương thức HTTP: GET, HEAD, POST");
 
             threadPool.submit(this::listenClients);
+            startUdpDiscoveryResponder();
             notifyStats();
             return true;
         } catch (IOException e) {
             log("[ERROR] Không thể mở cổng HTTP " + port + ": " + e.getMessage());
             return false;
+        }
+    }
+
+    private void startUdpDiscoveryResponder() {
+        Thread t = new Thread(() -> {
+            try {
+                discoverySocket = new DatagramSocket(null);
+                discoverySocket.setReuseAddress(true);
+                discoverySocket.bind(new InetSocketAddress(UDP_DISCOVERY_PORT));
+                byte[] buf = new byte[256];
+                while (isRunning && discoverySocket != null && !discoverySocket.isClosed()) {
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    discoverySocket.receive(packet);
+                    String msg = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8).trim();
+                    if ("DISCOVER_WEB_SERVER_REQUEST".equals(msg)) {
+                        String reply = "WEB_SERVER_DISCOVERED:" + port;
+                        byte[] out = reply.getBytes(StandardCharsets.UTF_8);
+                        DatagramPacket resp = new DatagramPacket(out, out.length, packet.getAddress(), packet.getPort());
+                        discoverySocket.send(resp);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }, "Web-UDP-Discovery");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    public static String getLocalLanIp() {
+        try {
+            String fallbackIp = null;
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue;
+                String name = (ni.getDisplayName() + " " + ni.getName()).toLowerCase();
+                if (name.contains("virtual") || name.contains("vmware") || name.contains("vbox")
+                        || name.contains("wsl") || name.contains("hyper-v") || name.contains("loopback")) {
+                    continue;
+                }
+                Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                        String ip = addr.getHostAddress();
+                        if (name.contains("wi-fi") || name.contains("wlan") || name.contains("wireless")) {
+                            return ip;
+                        }
+                        if (fallbackIp == null) fallbackIp = ip;
+                    }
+                }
+            }
+            if (fallbackIp != null) return fallbackIp;
+            return InetAddress.getLocalHost().getHostAddress();
+        } catch (Exception e) {
+            return "127.0.0.1";
         }
     }
 
@@ -135,6 +197,9 @@ public class HttpServer {
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {
                 serverSocket.close();
+            }
+            if (discoverySocket != null && !discoverySocket.isClosed()) {
+                discoverySocket.close();
             }
         } catch (IOException ignored) {}
 

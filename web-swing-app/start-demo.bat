@@ -14,7 +14,7 @@ if not exist downloads mkdir downloads
 if not exist browser_data mkdir browser_data
 
 echo [1/4] Đang kiểm tra và biên dịch mã nguồn Java...
-javac -encoding UTF-8 -d bin src/web/common/*.java src/web/server/*.java src/web/client/*.java src/web/ui/*.java
+javac --release 11 -encoding UTF-8 -d bin src/web/common/*.java src/web/server/*.java src/web/client/*.java src/web/ui/*.java
 
 echo [2/4] Khởi động Web Server Dashboard (Port 8080)...
 start "Web Server Dashboard" java -Dfile.encoding=UTF-8 -cp bin web.server.WebServerGUI

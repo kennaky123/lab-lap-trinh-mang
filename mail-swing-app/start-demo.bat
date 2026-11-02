@@ -13,7 +13,7 @@ if not exist mail_data mkdir mail_data
 if not exist attachments mkdir attachments
 
 echo [1/4] Đang kiểm tra và biên dịch mã nguồn Java...
-javac -encoding UTF-8 -d bin src/mail/common/*.java src/mail/server/*.java src/mail/client/*.java src/mail/ui/*.java
+javac --release 11 -encoding UTF-8 -d bin src/mail/common/*.java src/mail/server/*.java src/mail/client/*.java src/mail/ui/*.java
 
 echo [2/4] Khởi động Mail Server (SMTP 2525 + POP3 1110)...
 start "Mail Server Dashboard" java -Dfile.encoding=UTF-8 -cp bin mail.server.MailServerGUI

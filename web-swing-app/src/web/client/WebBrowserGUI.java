@@ -13,9 +13,7 @@ import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.io.*;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.URL;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -115,12 +113,16 @@ public class WebBrowserGUI extends JFrame {
         reloadBtn.addActionListener(e -> navigateTo(currentUrl, false));
 
         homeBtn = createNavBtn("Trang Chủ", "Trang chủ (Home)");
-        homeBtn.addActionListener(e -> navigateTo("http://localhost:8080/", false));
+        homeBtn.addActionListener(e -> navigateTo(getBaseOrigin() + "/", false));
+
+        JButton lanBtn = createNavBtn("Tìm IP LAN", "Tự động tìm Web Server trong mạng Wi-Fi");
+        lanBtn.addActionListener(e -> discoverWebServerInLan());
 
         navBar.add(backBtn);
         navBar.add(fwdBtn);
         navBar.add(reloadBtn);
         navBar.add(homeBtn);
+        navBar.add(lanBtn);
 
         // Omnibox (Thanh địa chỉ)
         JPanel omniboxPanel = new JPanel(new BorderLayout(6, 0));
@@ -230,9 +232,9 @@ public class WebBrowserGUI extends JFrame {
                     // Xử lý form submit POST
                     FormSubmitEvent fse = (FormSubmitEvent) e;
                     URL formUrl = fse.getURL();
-                    String postTarget = (formUrl != null) ? formUrl.toString() : "http://localhost:8080/submit-feedback";
+                    String postTarget = (formUrl != null) ? formUrl.toString() : getBaseOrigin() + "/submit-feedback";
                     if (postTarget.startsWith("/")) {
-                        postTarget = "http://localhost:8080" + postTarget;
+                        postTarget = getBaseOrigin() + postTarget;
                     }
                     if (FormSubmitEvent.MethodType.POST.equals(fse.getMethod())) {
                         handleFormPost(postTarget, fse.getData());
@@ -244,7 +246,7 @@ public class WebBrowserGUI extends JFrame {
                 String urlStr = (targetUrl != null) ? targetUrl.toString() : e.getDescription();
                 if (urlStr != null) {
                     if (urlStr.startsWith("/")) {
-                        urlStr = "http://localhost:8080" + urlStr;
+                        urlStr = getBaseOrigin() + urlStr;
                     }
                     checkAndDownloadOrNavigate(urlStr);
                 }
@@ -659,6 +661,62 @@ public class WebBrowserGUI extends JFrame {
         });
         timer.setRepeats(true);
         timer.start();
+    }
+
+    private String getBaseOrigin() {
+        try {
+            URL u = new URL(currentUrl);
+            int p = u.getPort() != -1 ? u.getPort() : 8080;
+            return u.getProtocol() + "://" + u.getHost() + ":" + p;
+        } catch (Exception e) {
+            return "http://localhost:8080";
+        }
+    }
+
+    private void discoverWebServerInLan() {
+        statusLabel.setText("Đang dò tìm Web Server trong mạng Wi-Fi (LAN)...");
+        new Thread(() -> {
+            String foundIp = null;
+            int foundPort = 8080;
+            try (DatagramSocket socket = new DatagramSocket()) {
+                socket.setBroadcast(true);
+                socket.setSoTimeout(2000);
+                byte[] req = "DISCOVER_WEB_SERVER_REQUEST".getBytes(StandardCharsets.UTF_8);
+                DatagramPacket packet = new DatagramPacket(
+                        req, req.length,
+                        InetAddress.getByName("255.255.255.255"),
+                        8081
+                );
+                socket.send(packet);
+
+                byte[] buf = new byte[256];
+                DatagramPacket resp = new DatagramPacket(buf, buf.length);
+                socket.receive(resp);
+                String msg = new String(resp.getData(), 0, resp.getLength(), StandardCharsets.UTF_8).trim();
+                if (msg.startsWith("WEB_SERVER_DISCOVERED")) {
+                    foundIp = resp.getAddress().getHostAddress();
+                    String[] parts = msg.split(":");
+                    if (parts.length >= 2) {
+                        try {
+                            foundPort = Integer.parseInt(parts[1].trim());
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            final String ip = foundIp;
+            final int port = foundPort;
+            SwingUtilities.invokeLater(() -> {
+                if (ip != null) {
+                    String lanUrl = "http://" + ip + ":" + port + "/";
+                    navigateTo(lanUrl, false);
+                } else {
+                    JOptionPane.showMessageDialog(this,
+                            "Không tìm thấy Web Server tự động qua UDP.\nHãy nhập trực tiếp http://<IP_MÁY_1>:8080/ vào thanh địa chỉ.",
+                            "Thông Báo", JOptionPane.WARNING_MESSAGE);
+                }
+            });
+        }, "Web-LAN-Discovery").start();
     }
 
     private void goBack() {

@@ -13,7 +13,7 @@ if not exist downloads mkdir downloads
 if not exist chat_data mkdir chat_data
 
 echo [1/8] Đang kiểm tra và biên dịch mã nguồn...
-javac -encoding UTF-8 -cp "lib/*" -d bin src/chatapp/common/*.java src/chatapp/server/*.java src/chatapp/client/*.java src/chatapp/ui/*.java
+javac --release 11 -encoding UTF-8 -cp "lib/*" -d bin src/chatapp/common/*.java src/chatapp/server/*.java src/chatapp/client/*.java src/chatapp/ui/*.java
 
 echo [2/8] Khởi động Server GUI...
 start "Chat Server Dashboard" java -Dfile.encoding=UTF-8 -cp "bin;lib/*" chatapp.server.ServerGUI
