@@ -10,6 +10,10 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.util.List;
@@ -103,6 +107,10 @@ public class RmiClientGUI extends JFrame {
         autoFailoverCheckBox = new JCheckBox("Tự động chuyển đổi dự phòng (Auto Failover)", true);
         autoFailoverCheckBox.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         serverControl.add(autoFailoverCheckBox);
+
+        JButton findLanBtn = new JButton("Tìm IP LAN");
+        findLanBtn.addActionListener(e -> discoverRmiServerInLan(null, null));
+        serverControl.add(findLanBtn);
 
         JButton configIpBtn = new JButton("⚙ Đổi IP Máy Chủ");
         configIpBtn.addActionListener(e -> promptChangeServerIps());
@@ -198,18 +206,24 @@ public class RmiClientGUI extends JFrame {
         JButton addBtn = new JButton("+ Thêm Mới");
         addBtn.setBackground(new Color(40, 167, 69));
         addBtn.setForeground(Color.WHITE);
+        addBtn.setContentAreaFilled(false);
+        addBtn.setOpaque(true);
         addBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         addBtn.addActionListener(e -> doAddRecord());
 
         JButton updateBtn = new JButton("Sửa Bản Ghi");
         updateBtn.setBackground(new Color(242, 153, 74));
         updateBtn.setForeground(Color.WHITE);
+        updateBtn.setContentAreaFilled(false);
+        updateBtn.setOpaque(true);
         updateBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         updateBtn.addActionListener(e -> doUpdateRecord());
 
         JButton deleteBtn = new JButton("Xóa Bản Ghi");
         deleteBtn.setBackground(new Color(220, 53, 69));
         deleteBtn.setForeground(Color.WHITE);
+        deleteBtn.setContentAreaFilled(false);
+        deleteBtn.setOpaque(true);
         deleteBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         deleteBtn.addActionListener(e -> doDeleteRecord());
 
@@ -421,15 +435,70 @@ public class RmiClientGUI extends JFrame {
         dataTable.clearSelection();
     }
 
+    private void discoverRmiServerInLan(JTextField s1Field, JTextField s2Field) {
+        connectionStatusLabel.setText("Đang dò tìm RMI Server trong mạng Wi-Fi (LAN)...");
+        new Thread(() -> {
+            String foundIp = null;
+            try (DatagramSocket socket = new DatagramSocket()) {
+                socket.setBroadcast(true);
+                socket.setSoTimeout(2000);
+                byte[] req = "DISCOVER_RMI_SERVER_REQUEST".getBytes(StandardCharsets.UTF_8);
+                DatagramPacket packet = new DatagramPacket(
+                        req, req.length,
+                        InetAddress.getByName("255.255.255.255"),
+                        1101
+                );
+                socket.send(packet);
+
+                byte[] buf = new byte[256];
+                DatagramPacket resp = new DatagramPacket(buf, buf.length);
+                socket.receive(resp);
+                String msg = new String(resp.getData(), 0, resp.getLength(), StandardCharsets.UTF_8).trim();
+                if (msg.startsWith("RMI_SERVER_DISCOVERED")) {
+                    foundIp = resp.getAddress().getHostAddress();
+                }
+            } catch (Exception ignored) {}
+
+            final String ip = foundIp;
+            SwingUtilities.invokeLater(() -> {
+                if (ip != null) {
+                    server1Host = ip;
+                    server2Host = ip;
+                    if (s1Field != null) s1Field.setText(ip);
+                    if (s2Field != null) s2Field.setText(ip);
+                    serverSelectorCombo.setModel(new DefaultComboBoxModel<>(new String[]{
+                            "Server 1 (" + server1Host + ":" + server1Port + ")",
+                            "Server 2 (" + server2Host + ":" + server2Port + ")"
+                    }));
+                    JOptionPane.showMessageDialog(this,
+                            "Đã tìm thấy RMI Server trong mạng LAN tại IP: " + ip,
+                            "Tìm IP LAN Thành Công", JOptionPane.INFORMATION_MESSAGE);
+                    connectToServer(activeServerIndex);
+                } else {
+                    JOptionPane.showMessageDialog(this,
+                            "Không tìm thấy RMI Server tự động qua UDP.\nHãy nhập trực tiếp địa chỉ IP LAN hiện trên tiêu đề của RMI Server.",
+                            "Thông Báo", JOptionPane.WARNING_MESSAGE);
+                }
+            });
+        }, "RMI-Client-LAN-Discovery").start();
+    }
+
     private void promptChangeServerIps() {
         JTextField s1HostField = new JTextField(server1Host);
         JTextField s1PortField = new JTextField(String.valueOf(server1Port));
         JTextField s2HostField = new JTextField(server2Host);
         JTextField s2PortField = new JTextField(String.valueOf(server2Port));
 
+        JButton autoFindBtn = new JButton("Tìm IP LAN");
+        autoFindBtn.addActionListener(e -> discoverRmiServerInLan(s1HostField, s2HostField));
+
+        JPanel s1Panel = new JPanel(new BorderLayout(4, 0));
+        s1Panel.add(s1HostField, BorderLayout.CENTER);
+        s1Panel.add(autoFindBtn, BorderLayout.EAST);
+
         JPanel p = new JPanel(new GridLayout(4, 2, 6, 6));
         p.add(new JLabel("Server 1 Host / IP:"));
-        p.add(s1HostField);
+        p.add(s1Panel);
         p.add(new JLabel("Server 1 Port RMI:"));
         p.add(s1PortField);
         p.add(new JLabel("Server 2 Host / IP:"));

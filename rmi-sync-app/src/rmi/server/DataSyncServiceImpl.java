@@ -26,22 +26,30 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
 
     private final String serverId;         // "Server 1" hoặc "Server 2"
     private final int myPort;              // 1099 hoặc 1100
-    private final String peerHost;         // IP máy thực của Peer Server (hoặc localhost)
-    private final int peerPort;            // Port của Peer Server
-    private final String peerServiceUrl;   // rmi://peerHost:peerPort/DataSyncService
+    private String peerHost;               // IP máy thực của Peer Server (hoặc localhost)
+    private int peerPort;                  // Port của Peer Server
+    private String peerServiceUrl;         // rmi://peerHost:peerPort/DataSyncService
 
     private final RmiDatabase db;
     private final List<SyncEventListener> listeners = new ArrayList<>();
     private boolean isPeerOnline = false;
 
     public DataSyncServiceImpl(String serverId, int myPort, String peerHost, int peerPort, String dataDir) throws RemoteException {
-        super();
+        super(myPort);
         this.serverId = serverId;
         this.myPort = myPort;
         this.peerHost = peerHost;
         this.peerPort = peerPort;
         this.peerServiceUrl = "rmi://" + peerHost + ":" + peerPort + "/DataSyncService";
         this.db = new RmiDatabase(dataDir);
+    }
+
+    public synchronized void updatePeerTarget(String newPeerHost, int newPeerPort) {
+        this.peerHost = newPeerHost;
+        this.peerPort = newPeerPort;
+        this.peerServiceUrl = "rmi://" + newPeerHost + ":" + newPeerPort + "/DataSyncService";
+        this.isPeerOnline = false;
+        log("[CẤU HÌNH PEER] Đã cập nhật địa chỉ Server đối tác thành: " + this.peerServiceUrl);
     }
 
     public void addListener(SyncEventListener l) {

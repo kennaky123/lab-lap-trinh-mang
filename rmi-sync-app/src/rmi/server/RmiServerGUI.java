@@ -7,8 +7,11 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Random;
 
@@ -29,11 +32,14 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
     private DataSyncServiceImpl service;
     private Registry registry;
 
+    private JLabel subLabel;
     private JLabel statusLabel;
     private JLabel peerStatusLabel;
     private JLabel recordCountLabel;
     private JTextArea logArea;
     private DefaultTableModel tableModel;
+
+    public static final int UDP_DISCOVERY_PORT = 1101;
 
     public RmiServerGUI(String serverId, int myPort, String peerHost, int peerPort, String dataDir) {
         this.serverId = serverId;
@@ -42,13 +48,17 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         this.peerPort = peerPort;
         this.dataDir = dataDir;
 
-        setTitle("RMI SERVER DASHBOARD - [" + serverId + " - Cổng " + myPort + "]");
+        String lanIp = getLocalLanIp();
+        System.setProperty("java.rmi.server.hostname", lanIp);
+
+        setTitle("RMI SERVER DASHBOARD - [" + serverId + " - IP LAN: " + lanIp + ":" + myPort + "]");
         setSize(980, 680);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
         initUI();
         startRmiService();
+        startUdpDiscoveryResponder();
     }
 
     private void initUI() {
@@ -74,7 +84,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
         titleLabel.setForeground(themeColor);
 
-        JLabel subLabel = new JLabel("Cổng nội bộ: " + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort);
+        subLabel = new JLabel("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort);
         subLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         subLabel.setForeground(new Color(100, 105, 115));
 
@@ -89,9 +99,15 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         JPanel headerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         headerActions.setOpaque(false);
 
+        JButton peerIpBtn = new JButton("⚙ Đổi IP Đối Tác");
+        peerIpBtn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        peerIpBtn.addActionListener(e -> promptChangePeerIp());
+
         JButton addSampleBtn = new JButton("+ Thêm Nhanh Bản Ghi");
         addSampleBtn.setBackground(new Color(40, 167, 69));
         addSampleBtn.setForeground(Color.WHITE);
+        addSampleBtn.setContentAreaFilled(false);
+        addSampleBtn.setOpaque(true);
         addSampleBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         addSampleBtn.setFocusPainted(false);
         addSampleBtn.addActionListener(e -> addSampleRecord());
@@ -100,6 +116,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         resyncBtn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         resyncBtn.addActionListener(e -> forceFullSync());
 
+        headerActions.add(peerIpBtn);
         headerActions.add(addSampleBtn);
         headerActions.add(resyncBtn);
         headerPanel.add(headerActions, BorderLayout.EAST);
@@ -253,6 +270,84 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
                 JOptionPane.showMessageDialog(this, "Không thể kết nối Server đối tác: " + ex.getMessage(), "Lỗi Đồng Bộ", JOptionPane.ERROR_MESSAGE);
             }
         }).start();
+    }
+
+    private void promptChangePeerIp() {
+        JTextField hostF = new JTextField(peerHost);
+        JTextField portF = new JTextField(String.valueOf(peerPort));
+        JPanel p = new JPanel(new GridLayout(2, 2, 6, 6));
+        p.add(new JLabel("IP Server Đối Tác (Peer IP):"));
+        p.add(hostF);
+        p.add(new JLabel("Cổng RMI Đối Tác (1099 / 1100):"));
+        p.add(portF);
+
+        int r = JOptionPane.showConfirmDialog(this, p, "Cấu Hình Kết Nối Server Đối Tác", JOptionPane.OK_CANCEL_OPTION);
+        if (r == JOptionPane.OK_OPTION) {
+            peerHost = hostF.getText().trim();
+            try {
+                peerPort = Integer.parseInt(portF.getText().trim());
+            } catch (NumberFormatException ignored) {}
+            subLabel.setText("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort);
+            if (service != null) {
+                service.updatePeerTarget(peerHost, peerPort);
+            }
+            onPeerStatusChanged(false);
+        }
+    }
+
+    private void startUdpDiscoveryResponder() {
+        Thread t = new Thread(() -> {
+            try {
+                DatagramSocket socket = new DatagramSocket(null);
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(UDP_DISCOVERY_PORT));
+                byte[] buf = new byte[256];
+                while (!socket.isClosed()) {
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    socket.receive(packet);
+                    String msg = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8).trim();
+                    if ("DISCOVER_RMI_SERVER_REQUEST".equals(msg)) {
+                        String reply = "RMI_SERVER_DISCOVERED:" + myPort;
+                        byte[] out = reply.getBytes(StandardCharsets.UTF_8);
+                        DatagramPacket resp = new DatagramPacket(out, out.length, packet.getAddress(), packet.getPort());
+                        socket.send(resp);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }, "RMI-UDP-Discovery");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    public static String getLocalLanIp() {
+        try {
+            String fallbackIp = null;
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue;
+                String name = (ni.getDisplayName() + " " + ni.getName()).toLowerCase();
+                if (name.contains("virtual") || name.contains("vmware") || name.contains("vbox")
+                        || name.contains("wsl") || name.contains("hyper-v") || name.contains("loopback")) {
+                    continue;
+                }
+                Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                        String ip = addr.getHostAddress();
+                        if (name.contains("wi-fi") || name.contains("wlan") || name.contains("wireless")) {
+                            return ip;
+                        }
+                        if (fallbackIp == null) fallbackIp = ip;
+                    }
+                }
+            }
+            if (fallbackIp != null) return fallbackIp;
+            return InetAddress.getLocalHost().getHostAddress();
+        } catch (Exception e) {
+            return "127.0.0.1";
+        }
     }
 
     @Override
