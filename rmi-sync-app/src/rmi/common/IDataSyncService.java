@@ -6,10 +6,21 @@ import java.util.List;
 
 /**
  * Remote Interface định nghĩa các phương thức gọi từ xa (RMI):
+ * - Đăng nhập & Phân quyền người dùng (Authentication & Authorization)
  * - Thao tác dữ liệu từ Client (CRUD)
  * - Thao tác đồng bộ hóa phân tán giữa 2 Server (Data Replication)
  */
 public interface IDataSyncService extends Remote {
+
+    // ==================== ĐĂNG NHẬP & PHÂN QUYỀN ====================
+
+    RmiUser login(String username, String password) throws RemoteException;
+
+    List<RmiUser> getAllUsers() throws RemoteException;
+
+    boolean saveUser(RmiUser user) throws RemoteException;
+
+    boolean deleteUser(String username) throws RemoteException;
 
     // ==================== CÁC PHƯƠNG THỨC CHO CLIENT ====================
 
@@ -26,12 +37,14 @@ public interface IDataSyncService extends Remote {
     // ==================== CÁC PHƯƠNG THỨC ĐỒNG BỘ 2 SERVER ====================
 
     /**
-     * Nhận yêu cầu sao chép (Replicate) thay đổi từ Server đối tác
-     * @param action "ADD", "UPDATE", "DELETE"
-     * @param item Đối tượng dữ liệu
-     * @param senderServerId Tên Server gửi (tránh vòng lặp vô tận ping-pong)
+     * Nhận yêu cầu sao chép (Replicate) thay đổi bản ghi từ Server đối tác
      */
     boolean syncReplicate(String action, RecordItem item, String senderServerId) throws RemoteException;
+
+    /**
+     * Nhận yêu cầu sao chép (Replicate) tài khoản phân quyền từ Server đối tác
+     */
+    boolean syncUserReplicate(String action, RmiUser user, String senderServerId) throws RemoteException;
 
     /**
      * Đồng bộ toàn bộ dữ liệu khi một Server vừa bật lại sau khi mất kết nối (Catch-up / Resync)
@@ -48,4 +61,3 @@ public interface IDataSyncService extends Remote {
      */
     String getServerInfo() throws RemoteException;
 }
-

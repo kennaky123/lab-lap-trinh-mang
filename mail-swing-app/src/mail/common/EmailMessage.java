@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Đại diện một bức thư điện tử (Email Message) theo chuẩn RFC 5322
@@ -18,9 +20,8 @@ public class EmailMessage implements Serializable {
     private String body;
     private long timestamp;
     private boolean isRead;
-    private boolean isDeleted; // Đánh dấu xóa (POP3 DELE)
+    private boolean isDeleted;
 
-    // Đính kèm tệp tin
     private String attachmentName;
     private byte[] attachmentData;
 
@@ -85,9 +86,6 @@ public class EmailMessage implements Serializable {
         return size;
     }
 
-    /**
-     * Xuất ra chuỗi định dạng MIME / RFC 5322 chuẩn phục vụ giao thức SMTP & POP3
-     */
     public String toRfc822String() {
         SimpleDateFormat rfcDate = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US);
         StringBuilder sb = new StringBuilder();
@@ -102,29 +100,27 @@ public class EmailMessage implements Serializable {
             String boundary = "----=_Part_" + id;
             sb.append("Content-Type: multipart/mixed; boundary=\"").append(boundary).append("\"\r\n\r\n");
 
-            // Text Part
             sb.append("--").append(boundary).append("\r\n");
-            sb.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
+            sb.append("Content-Type: text/plain; charset=UTF-8\r\n");
+            sb.append("Content-Transfer-Encoding: 8bit\r\n\r\n");
             sb.append(body != null ? body : "").append("\r\n\r\n");
 
-            // Attachment Part
             sb.append("--").append(boundary).append("\r\n");
             sb.append("Content-Type: application/octet-stream; name=\"").append(attachmentName).append("\"\r\n");
             sb.append("Content-Disposition: attachment; filename=\"").append(attachmentName).append("\"\r\n");
             sb.append("Content-Transfer-Encoding: base64\r\n\r\n");
-            sb.append(Base64.getEncoder().encodeToString(attachmentData)).append("\r\n\r\n");
+            String b64Wrapped = Base64.getMimeEncoder(76, "\r\n".getBytes(StandardCharsets.US_ASCII))
+                    .encodeToString(attachmentData);
+            sb.append(b64Wrapped).append("\r\n\r\n");
             sb.append("--").append(boundary).append("--");
         } else {
-            sb.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
+            sb.append("Content-Type: text/plain; charset=UTF-8\r\n");
+            sb.append("Content-Transfer-Encoding: 8bit\r\n\r\n");
             sb.append(body != null ? body : "");
         }
         return sb.toString();
     }
 
-    /**
-     * Phân tích chuỗi RFC 5322 / MIME (từ lệnh SMTP DATA hoặc POP3 RETR) thành đối tượng EmailMessage,
-     * hỗ trợ bóc tách cả nội dung văn bản và tệp đính kèm Base64.
-     */
     public static EmailMessage fromRfc822String(String raw, String defaultFrom, String defaultTo) {
         String from = defaultFrom != null ? defaultFrom : "Unknown";
         String to = defaultTo != null ? defaultTo : "Unknown";
@@ -143,13 +139,13 @@ public class EmailMessage implements Serializable {
                 for (String h : headers.split("\r\n")) {
                     String lower = h.toLowerCase();
                     if (lower.startsWith("from:")) {
-                        from = h.substring(5).trim();
+                        from = decodeMimeHeader(h.substring(5).trim());
                     } else if (lower.startsWith("to:")) {
-                        to = h.substring(3).trim();
+                        to = decodeMimeHeader(h.substring(3).trim());
                     } else if (lower.startsWith("subject:")) {
-                        subject = h.substring(8).trim();
+                        subject = decodeMimeHeader(h.substring(8).trim());
                     } else if (lower.contains("boundary=")) {
-                        int idx = h.indexOf("boundary=");
+                        int idx = h.toLowerCase().indexOf("boundary=");
                         boundary = h.substring(idx + 9).trim();
                         if (boundary.startsWith("\"") && boundary.endsWith("\"") && boundary.length() >= 2) {
                             boundary = boundary.substring(1, boundary.length() - 1);
@@ -158,7 +154,7 @@ public class EmailMessage implements Serializable {
                 }
 
                 if (boundary != null && !boundary.isEmpty()) {
-                    String[] parts = rawBody.split("--" + java.util.regex.Pattern.quote(boundary));
+                    String[] parts = rawBody.split("--" + Pattern.quote(boundary));
                     StringBuilder textBuilder = new StringBuilder();
                     for (String part : parts) {
                         String trimmed = part.trim();
@@ -172,10 +168,9 @@ public class EmailMessage implements Serializable {
                         String partHeadersLower = partHeaders.toLowerCase();
 
                         if (partHeadersLower.contains("content-disposition: attachment") || partHeadersLower.contains("filename=")) {
-                            // Trích xuất tên file
                             String fn = extractParam(partHeaders, "filename=");
                             if (fn == null) fn = extractParam(partHeaders, "name=");
-                            attachName = fn != null ? fn : "attachment.bin";
+                            attachName = fn != null ? decodeMimeHeader(fn) : "attachment.bin";
                             try {
                                 String cleanB64 = partContent.replaceAll("\\s+", "");
                                 attachData = Base64.getDecoder().decode(cleanB64.getBytes(StandardCharsets.UTF_8));
@@ -196,6 +191,33 @@ public class EmailMessage implements Serializable {
         msg.setAttachmentName(attachName);
         msg.setAttachmentData(attachData);
         return msg;
+    }
+
+    private static String decodeMimeHeader(String text) {
+        if (text == null || !text.contains("=?")) return text;
+        try {
+            Pattern pattern = Pattern.compile("=\\?([^?]+)\\?([BbQq])\\?([^?]+)\\?=");
+            Matcher matcher = pattern.matcher(text);
+            StringBuilder sb = new StringBuilder();
+            int lastEnd = 0;
+            while (matcher.find()) {
+                sb.append(text, lastEnd, matcher.start());
+                String charset = matcher.group(1);
+                String encoding = matcher.group(2).toUpperCase();
+                String encodedText = matcher.group(3);
+                if ("B".equals(encoding)) {
+                    byte[] bytes = Base64.getDecoder().decode(encodedText);
+                    sb.append(new String(bytes, charset));
+                } else {
+                    sb.append(encodedText.replace('_', ' '));
+                }
+                lastEnd = matcher.end();
+            }
+            sb.append(text.substring(lastEnd));
+            return sb.toString();
+        } catch (Exception e) {
+            return text;
+        }
     }
 
     private static String extractParam(String headers, String key) {

@@ -2,6 +2,7 @@ package rmi.server;
 
 import rmi.common.IDataSyncService;
 import rmi.common.RecordItem;
+import rmi.common.RmiUser;
 
 import java.rmi.Naming;
 import java.rmi.RemoteException;
@@ -11,8 +12,9 @@ import java.util.*;
 
 /**
  * Hiện thực Remote Interface IDataSyncService:
+ * - Xác thực đăng nhập và phân quyền (ADMIN, EDITOR, VIEWER)
  * - Điều phối dữ liệu phân tán giữa 2 Máy chủ Server 1 và Server 2
- * - Tự động đồng bộ hóa hai chiều (Two-Way Active Replication)
+ * - Tự động đồng bộ hóa hai chiều (Two-Way Active Replication) cả Dữ liệu lẫn Tài khoản
  * - Tự động phát hiện và đồng bộ bù dữ liệu (Catch-up Sync) khi máy chủ đối tác bật lại
  */
 public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyncService {
@@ -21,6 +23,7 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
     public interface SyncEventListener {
         void onLog(String text);
         void onDataChanged(List<RecordItem> currentData);
+        void onUsersChanged(List<RmiUser> currentUsers);
         void onPeerStatusChanged(boolean isPeerOnline);
     }
 
@@ -56,6 +59,75 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         listeners.add(l);
     }
 
+    // ==================== ĐĂNG NHẬP & PHÂN QUYỀN ====================
+
+    @Override
+    public synchronized RmiUser login(String username, String password) throws RemoteException {
+        RmiUser user = db.authenticate(username, password);
+        if (user != null) {
+            log("[XÁC THỰC RMI] Đăng nhập thành công: " + user.getUsername() + " (Vai trò: " + user.getRole() + " - Quyền: " + user.getPermissionSummary() + ")");
+        } else {
+            log("[TỪ CHỐI ĐĂNG NHẬP] Sai tài khoản hoặc mật khẩu cho: " + username);
+        }
+        return user;
+    }
+
+    @Override
+    public synchronized List<RmiUser> getAllUsers() throws RemoteException {
+        return db.getAllUsers();
+    }
+
+    @Override
+    public synchronized boolean saveUser(RmiUser user) throws RemoteException {
+        if (user == null || user.getUsername() == null) return false;
+        boolean ok = db.putUser(user);
+        if (ok) {
+            log("[PHÂN QUYỀN SQL] Đã lưu tài khoản '" + user.getUsername() + "' [" + user.getRole() + ": " + user.getPermissionSummary() + "]");
+            notifyUsersChanged();
+            replicateUserToPeer("SAVE_USER", user);
+        }
+        return ok;
+    }
+
+    @Override
+    public synchronized boolean deleteUser(String username) throws RemoteException {
+        if (username == null) return false;
+        boolean ok = db.removeUser(username);
+        if (ok) {
+            log("[PHÂN QUYỀN SQL] Đã xóa tài khoản '" + username + "'");
+            notifyUsersChanged();
+            RmiUser dummy = new RmiUser();
+            dummy.setUsername(username);
+            replicateUserToPeer("DELETE_USER", dummy);
+        }
+        return ok;
+    }
+
+    @Override
+    public synchronized boolean syncUserReplicate(String action, RmiUser user, String senderServerId) throws RemoteException {
+        if (serverId.equals(senderServerId) || user == null) return true;
+        log("[ĐỒNG BỘ USER TỪ " + senderServerId + "] Nhận lệnh: " + action + " cho tài khoản '" + user.getUsername() + "'");
+        if ("SAVE_USER".equals(action)) {
+            db.putUser(user);
+        } else if ("DELETE_USER".equals(action)) {
+            db.removeUser(user.getUsername());
+        }
+        notifyUsersChanged();
+        return true;
+    }
+
+    private void replicateUserToPeer(String action, RmiUser user) {
+        new Thread(() -> {
+            try {
+                IDataSyncService peer = (IDataSyncService) Naming.lookup(peerServiceUrl);
+                peer.syncUserReplicate(action, user, serverId);
+                updatePeerStatus(true);
+            } catch (Exception e) {
+                updatePeerStatus(false);
+            }
+        }).start();
+    }
+
     // ==================== CÁC PHƯƠNG THỨC GỌI TỪ CLIENT ====================
 
     @Override
@@ -67,9 +139,11 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         }
 
         item.setLastModified(System.currentTimeMillis());
-        item.setLastUpdatedByServer(serverId);
+        if (item.getLastUpdatedByServer() == null || item.getLastUpdatedByServer().isEmpty()) {
+            item.setLastUpdatedByServer(serverId);
+        }
         db.put(item);
-        log("[CLIENT ADD] Đã thêm bản ghi " + item.getId() + " vào " + serverId);
+        log("[CLIENT ADD] Đã thêm bản ghi " + item.getId() + " vào " + serverId + " (" + item.getLastUpdatedByServer() + ")");
         notifyDataChanged();
 
         // Đồng bộ tức thời sang Server đối tác (Replication)
@@ -86,9 +160,11 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         }
 
         item.setLastModified(System.currentTimeMillis());
-        item.setLastUpdatedByServer(serverId);
+        if (item.getLastUpdatedByServer() == null || item.getLastUpdatedByServer().isEmpty()) {
+            item.setLastUpdatedByServer(serverId);
+        }
         db.put(item);
-        log("[CLIENT UPDATE] Đã cập nhật bản ghi " + item.getId() + " trên " + serverId);
+        log("[CLIENT UPDATE] Đã cập nhật bản ghi " + item.getId() + " trên " + serverId + " (" + item.getLastUpdatedByServer() + ")");
         notifyDataChanged();
 
         replicateToPeer("UPDATE", item);
@@ -136,7 +212,6 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
     @Override
     public synchronized boolean syncReplicate(String action, RecordItem item, String senderServerId) throws RemoteException {
         if (serverId.equals(senderServerId)) {
-            // Chống vòng lặp lặp lại (Cycle replication prevention)
             return true;
         }
 
@@ -158,9 +233,6 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         return db.getAll();
     }
 
-    /**
-     * Gửi yêu cầu sao chép (Replicate) sang Server đối tác qua RMI
-     */
     private void replicateToPeer(String action, RecordItem item) {
         new Thread(() -> {
             try {
@@ -175,9 +247,6 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         }).start();
     }
 
-    /**
-     * Bắt đầu luồng kiểm tra định kỳ (Heartbeat & Auto Catch-up)
-     */
     public void startPeerMonitor() {
         Thread t = new Thread(() -> {
             while (true) {
@@ -187,7 +256,6 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
                     boolean alive = peer.ping();
 
                     if (!isPeerOnline && alive) {
-                        // Peer Server vừa online lại -> Thực hiện Catch-up Full Sync
                         log("[TỰ ĐỘNG PHÁT HIỆN] Peer Server (" + peerHost + ":" + peerPort + ") đã ONLINE trở lại!");
                         log("[CATCH-UP SYNC] Đang kéo toàn bộ dữ liệu mới nhất từ Peer Server về...");
 
@@ -201,6 +269,14 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
                             }
                             notifyDataChanged();
                             log("[HOÀN TẤT ĐỒNG BỘ] Đã đồng bộ bù thành công (" + db.count() + " bản ghi)");
+                        }
+
+                        List<RmiUser> peerUsers = peer.getAllUsers();
+                        if (peerUsers != null) {
+                            for (RmiUser u : peerUsers) {
+                                db.putUser(u);
+                            }
+                            notifyUsersChanged();
                         }
                     }
                     updatePeerStatus(alive);
@@ -230,6 +306,13 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         }
     }
 
+    private void notifyUsersChanged() {
+        List<RmiUser> users = db.getAllUsers();
+        for (SyncEventListener l : listeners) {
+            l.onUsersChanged(users);
+        }
+    }
+
     private void log(String text) {
         SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
         String full = "[" + sdf.format(new Date()) + " - " + serverId + "] " + text;
@@ -243,9 +326,12 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         return db.getAll();
     }
 
+    public List<RmiUser> getCurrentUsers() {
+        return db.getAllUsers();
+    }
+
     public String getServerId() { return serverId; }
     public int getMyPort() { return myPort; }
     public String getPeerHost() { return peerHost; }
     public int getPeerPort() { return peerPort; }
 }
-

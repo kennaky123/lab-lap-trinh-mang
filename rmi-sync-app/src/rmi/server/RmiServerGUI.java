@@ -1,6 +1,7 @@
 package rmi.server;
 
 import rmi.common.RecordItem;
+import rmi.common.RmiUser;
 import rmi.ui.ModernScrollBarUI;
 
 import javax.swing.*;
@@ -19,7 +20,8 @@ import java.util.Random;
  * Giao diện Quản trị RMI Server Dashboard:
  * - Khởi tạo RMI Registry và Binding dịch vụ
  * - Giám sát trạng thái Online/Offline của Server đối tác (Peer Server)
- * - Hiển thị CSDL phân tán và nhật ký đồng bộ hóa RMI thời gian thực
+ * - Hiển thị CSDL phân tán SQLite (bảng records & bảng users phân quyền)
+ * - Nhật ký đồng bộ hóa RMI thời gian thực
  */
 public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEventListener {
 
@@ -38,6 +40,8 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
     private JLabel recordCountLabel;
     private JTextArea logArea;
     private DefaultTableModel tableModel;
+    private DefaultTableModel userTableModel;
+    private JTable userTable;
 
     public static final int UDP_DISCOVERY_PORT = 1101;
 
@@ -52,7 +56,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         System.setProperty("java.rmi.server.hostname", lanIp);
 
         setTitle("RMI SERVER DASHBOARD - [" + serverId + " - IP LAN: " + lanIp + ":" + myPort + "]");
-        setSize(980, 680);
+        setSize(1020, 700);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
@@ -80,11 +84,11 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
 
         Color themeColor = serverId.contains("1") ? new Color(24, 119, 242) : new Color(111, 66, 193);
 
-        JLabel titleLabel = new JLabel("HỆ THỐNG ĐỒNG BỘ HÓA RMI (" + serverId.toUpperCase() + ")");
+        JLabel titleLabel = new JLabel("HỆ THỐNG ĐỒNG BỘ HÓA RMI & PHÂN QUYỀN SQLITE (" + serverId.toUpperCase() + ")");
         titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
         titleLabel.setForeground(themeColor);
 
-        subLabel = new JLabel("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort);
+        subLabel = new JLabel("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort + "  |  CSDL: " + dataDir + "/records.db");
         subLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         subLabel.setForeground(new Color(100, 105, 115));
 
@@ -95,7 +99,6 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
 
         headerPanel.add(titleBlock, BorderLayout.WEST);
 
-        // Nút thêm nhanh dữ liệu mẫu để test đồng bộ
         JPanel headerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         headerActions.setOpaque(false);
 
@@ -128,7 +131,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
 
         statusLabel = createStatCard("Trạng Thái " + serverId, "Đang Khởi Động...", new Color(108, 117, 125));
         peerStatusLabel = createStatCard("Server Đối Tác (" + peerHost + ":" + peerPort + ")", "Đang Kiểm Tra...", new Color(242, 153, 74));
-        recordCountLabel = createStatCard("Tổng Số Bản Ghi CSDL", "0 Bản Ghi", themeColor);
+        recordCountLabel = createStatCard("Tổng Số Bản Ghi SQLite", "0 Bản Ghi", themeColor);
 
         statsBar.add(statusLabel);
         statsBar.add(peerStatusLabel);
@@ -145,12 +148,12 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         JTabbedPane tabbedPane = new JTabbedPane();
         tabbedPane.setFont(new Font("Segoe UI", Font.PLAIN, 13));
 
-        // Tab 1: CSDL Phân Tán Cục Bộ
+        // Tab 1: CSDL Phân Tán Cục Bộ (Bảng records)
         JPanel dataTab = new JPanel(new BorderLayout(8, 8));
         dataTab.setBorder(new EmptyBorder(8, 8, 8, 8));
 
         tableModel = new DefaultTableModel(new String[]{
-                "Mã ID", "Họ Tên / Tên Bản Ghi", "Ngành Học / Phân Loại", "Điểm / Giá Trị", "Thời Gian Cập Nhật", "Server Xuất Phát"
+                "Mã ID", "Họ Tên / Tên Bản Ghi", "Ngành Học / Phân Loại", "Điểm / Giá Trị", "Thời Gian Cập Nhật", "Server / Người Cập Nhật"
         }, 0) {
             @Override
             public boolean isCellEditable(int r, int c) { return false; }
@@ -163,9 +166,13 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.getVerticalScrollBar().setUI(new ModernScrollBarUI());
         dataTab.add(tableScroll, BorderLayout.CENTER);
-        tabbedPane.addTab("  Cơ Sở Dữ Liệu Phân Tán (Local Storage)  ", dataTab);
+        tabbedPane.addTab("  CSDL Bản Ghi (SQLite: records)  ", dataTab);
 
-        // Tab 2: Nhật Ký Đồng Bộ RMI
+        // Tab 2: Quản lý Phân quyền Tài khoản (Bảng users)
+        JPanel userTab = createUsersManagementTab();
+        tabbedPane.addTab("  Phân Quyền Tài Khoản (SQLite: users)  ", userTab);
+
+        // Tab 3: Nhật Ký Đồng Bộ RMI
         JPanel logTab = new JPanel(new BorderLayout(8, 8));
         logTab.setBorder(new EmptyBorder(8, 8, 8, 8));
         logArea = new JTextArea();
@@ -187,6 +194,140 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
 
         mainPanel.add(tabbedPane, BorderLayout.CENTER);
         add(mainPanel);
+    }
+
+    private JPanel createUsersManagementTab() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        userTableModel = new DefaultTableModel(new String[]{
+                "Tên Đăng Nhập (Username)", "Mật Khẩu", "Vai Trò (Role)", "Quyền Xem", "Quyền Thêm", "Quyền Sửa", "Quyền Xóa"
+        }, 0) {
+            @Override
+            public boolean isCellEditable(int r, int c) { return false; }
+        };
+        userTable = new JTable(userTableModel);
+        userTable.setRowHeight(26);
+        userTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        userTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+
+        JScrollPane scroll = new JScrollPane(userTable);
+        scroll.getVerticalScrollBar().setUI(new ModernScrollBarUI());
+        panel.add(scroll, BorderLayout.CENTER);
+
+        JPanel btnBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        JButton addUserBtn = new JButton("+ Thêm / Sửa Tài Khoản Phân Quyền");
+        addUserBtn.setBackground(new Color(24, 119, 242));
+        addUserBtn.setForeground(Color.WHITE);
+        addUserBtn.setContentAreaFilled(false);
+        addUserBtn.setOpaque(true);
+        addUserBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        addUserBtn.addActionListener(e -> showAddOrEditUserDialog());
+
+        JButton delUserBtn = new JButton("Xóa Tài Khoản");
+        delUserBtn.setBackground(new Color(220, 53, 69));
+        delUserBtn.setForeground(Color.WHITE);
+        delUserBtn.setContentAreaFilled(false);
+        delUserBtn.setOpaque(true);
+        delUserBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        delUserBtn.addActionListener(e -> deleteSelectedUser());
+
+        btnBar.add(addUserBtn);
+        btnBar.add(delUserBtn);
+        btnBar.add(new JLabel("   (Mặc định: admin/123456 [Toàn quyền] | editor/123456 [Thêm/Sửa] | sinhvien/123456 [Chỉ xem])"));
+
+        panel.add(btnBar, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private void showAddOrEditUserDialog() {
+        if (service == null) return;
+        JTextField userField = new JTextField();
+        JTextField passField = new JTextField("123456");
+        JComboBox<String> roleCombo = new JComboBox<>(new String[]{"ADMIN (Toàn quyền)", "EDITOR (Thêm & Sửa)", "VIEWER (Chỉ xem)", "CUSTOM (Tùy chỉnh)"});
+        JCheckBox addCheck = new JCheckBox("Cho phép Thêm bản ghi (Add)", true);
+        JCheckBox updateCheck = new JCheckBox("Cho phép Sửa bản ghi (Update)", true);
+        JCheckBox deleteCheck = new JCheckBox("Cho phép Xóa bản ghi (Delete)", true);
+
+        int selectedRow = userTable.getSelectedRow();
+        if (selectedRow != -1) {
+            userField.setText((String) userTableModel.getValueAt(selectedRow, 0));
+            passField.setText((String) userTableModel.getValueAt(selectedRow, 1));
+        }
+
+        roleCombo.addActionListener(e -> {
+            int idx = roleCombo.getSelectedIndex();
+            if (idx == 0) {
+                addCheck.setSelected(true);
+                updateCheck.setSelected(true);
+                deleteCheck.setSelected(true);
+            } else if (idx == 1) {
+                addCheck.setSelected(true);
+                updateCheck.setSelected(true);
+                deleteCheck.setSelected(false);
+            } else if (idx == 2) {
+                addCheck.setSelected(false);
+                updateCheck.setSelected(false);
+                deleteCheck.setSelected(false);
+            }
+        });
+
+        JPanel p = new JPanel(new GridLayout(6, 2, 6, 6));
+        p.add(new JLabel("Tên đăng nhập (Username):"));
+        p.add(userField);
+        p.add(new JLabel("Mật khẩu (Password):"));
+        p.add(passField);
+        p.add(new JLabel("Vai trò mẫu (Role):"));
+        p.add(roleCombo);
+        p.add(new JLabel("Quyền Thêm:"));
+        p.add(addCheck);
+        p.add(new JLabel("Quyền Sửa:"));
+        p.add(updateCheck);
+        p.add(new JLabel("Quyền Xóa:"));
+        p.add(deleteCheck);
+
+        int res = JOptionPane.showConfirmDialog(this, p, "Cấu Hình Tài Khoản & Phân Quyền (Đồng bộ 2 Server)", JOptionPane.OK_CANCEL_OPTION);
+        if (res == JOptionPane.OK_OPTION) {
+            String u = userField.getText().trim();
+            String pw = passField.getText().trim();
+            if (u.isEmpty() || pw.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu!", "Lỗi", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            String roleName = "CUSTOM";
+            if (addCheck.isSelected() && updateCheck.isSelected() && deleteCheck.isSelected()) roleName = "ADMIN";
+            else if (addCheck.isSelected() && updateCheck.isSelected() && !deleteCheck.isSelected()) roleName = "EDITOR";
+            else if (!addCheck.isSelected() && !updateCheck.isSelected() && !deleteCheck.isSelected()) roleName = "VIEWER";
+
+            RmiUser newUser = new RmiUser(u, pw, roleName, addCheck.isSelected(), updateCheck.isSelected(), deleteCheck.isSelected());
+            try {
+                service.saveUser(newUser);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Lỗi lưu tài khoản: " + ex.getMessage(), "Lỗi", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void deleteSelectedUser() {
+        if (service == null) return;
+        int row = userTable.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Hãy chọn một tài khoản trong bảng để xóa!", "Thông báo", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String username = (String) userTableModel.getValueAt(row, 0);
+        if ("admin".equalsIgnoreCase(username)) {
+            JOptionPane.showMessageDialog(this, "Không thể xóa tài khoản quản trị gốc 'admin'!", "Cảnh báo", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        int confirm = JOptionPane.showConfirmDialog(this, "Bạn có chắc muốn xóa tài khoản '" + username + "' trên cả 2 Server?", "Xác Nhận", JOptionPane.YES_NO_OPTION);
+        if (confirm == JOptionPane.YES_OPTION) {
+            try {
+                service.deleteUser(username);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Lỗi xóa tài khoản: " + ex.getMessage(), "Lỗi", JOptionPane.ERROR_MESSAGE);
+            }
+        }
     }
 
     private JLabel createStatCard(String title, String value, Color color) {
@@ -223,6 +364,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
                             + "<span style='font-size: 10px; color: #555555;'>Trạng Thái " + serverId + "</span><br>"
                             + "<b style='font-size: 13px; color: #28a745;'>Đang Chạy (RMI Port " + myPort + ")</b></div></html>");
                     onDataChanged(service.getCurrentData());
+                    onUsersChanged(service.getCurrentUsers());
                 });
 
                 service.startPeerMonitor();
@@ -245,7 +387,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         String dept = depts[new Random().nextInt(depts.length)];
         double score = 7.0 + (new Random().nextInt(30) / 10.0);
 
-        RecordItem item = new RecordItem(id, name, dept, score, serverId);
+        RecordItem item = new RecordItem(id, name, dept, score, serverId + " (admin)");
         try {
             service.addRecord(item);
         } catch (Exception ex) {
@@ -257,7 +399,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         if (service == null) return;
         new Thread(() -> {
             try {
-                java.rmi.registry.Registry peerReg = LocateRegistry.getRegistry(peerHost, peerPort);
+                Registry peerReg = LocateRegistry.getRegistry(peerHost, peerPort);
                 rmi.common.IDataSyncService peer = (rmi.common.IDataSyncService) peerReg.lookup("DataSyncService");
                 List<RecordItem> fullList = peer.requestFullSync();
                 if (fullList != null) {
@@ -287,7 +429,7 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
             try {
                 peerPort = Integer.parseInt(portF.getText().trim());
             } catch (NumberFormatException ignored) {}
-            subLabel.setText("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort);
+            subLabel.setText("IP LAN: " + getLocalLanIp() + ":" + myPort + "  |  Kết nối đối tác: " + peerHost + ":" + peerPort + "  |  CSDL: " + dataDir + "/records.db");
             if (service != null) {
                 service.updatePeerTarget(peerHost, peerPort);
             }
@@ -368,8 +510,26 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
                 });
             }
             recordCountLabel.setText("<html><div style='text-align: center; padding: 6px;'>"
-                    + "<span style='font-size: 10px; color: #555555;'>Tổng Số Bản Ghi CSDL</span><br>"
+                    + "<span style='font-size: 10px; color: #555555;'>Tổng Số Bản Ghi SQLite</span><br>"
                     + "<b style='font-size: 13px; color: #1877f2;'>" + currentData.size() + " Bản Ghi</b></div></html>");
+        });
+    }
+
+    @Override
+    public void onUsersChanged(List<RmiUser> currentUsers) {
+        SwingUtilities.invokeLater(() -> {
+            userTableModel.setRowCount(0);
+            for (RmiUser u : currentUsers) {
+                userTableModel.addRow(new Object[]{
+                        u.getUsername(),
+                        u.getPassword(),
+                        u.getRole(),
+                        "✔ Có",
+                        u.isCanAdd() ? "✔ Có" : "✖ Không",
+                        u.isCanUpdate() ? "✔ Có" : "✖ Không",
+                        u.isCanDelete() ? "✔ Có" : "✖ Không"
+                });
+            }
         });
     }
 
@@ -422,4 +582,3 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
         });
     }
 }
-

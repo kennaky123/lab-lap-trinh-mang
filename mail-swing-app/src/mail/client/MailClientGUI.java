@@ -21,7 +21,7 @@ import java.util.List;
 
 /**
  * Giao diện Mail Client phong cách Gmail hiện đại:
- * - Hỗ trợ cả 2 chế độ: Localhost Server (cổng 2525/1110) và Google Gmail thật (cổng 465/995)
+ * - Hỗ trợ cả 2 chế độ: Localhost Server (cổng 2525/1110) và Google Gmail / VKU Mail thật (cổng 465/995)
  * - Thanh danh mục Gmail (Hộp thư đến, Đã gửi, Soạn thư)
  * - Đọc thư chi tiết và gửi thư kèm tệp đính kèm
  * - Nhật ký lệnh giao thức SMTP / POP3 trực quan
@@ -39,10 +39,13 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
     private int smtpPort = MailConfig.LOCAL_SMTP_PORT;
     private int pop3Port = MailConfig.LOCAL_POP3_PORT;
 
+    private String savedGmailUser = "toandq.24itb@vku.udn.vn";
+    private String savedGmailPass = "";
+
     // Danh sách thư
     private final List<EmailMessage> inboxList = new ArrayList<>();
     private final List<EmailMessage> sentList = new ArrayList<>();
-    private String currentFolder = "INBOX"; // "INBOX" hoặc "SENT"
+    private String currentFolder = "INBOX";
 
     // UI Components
     private JLabel currentAccountLabel;
@@ -74,6 +77,7 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
             String clean = initialUser.trim().toLowerCase();
             if (!clean.contains("@")) clean = clean + "@local.com";
             this.currentUser = clean;
+            this.isGmailMode = !clean.endsWith("@local.com");
         }
         setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
         setSize(1100, 750);
@@ -84,9 +88,18 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         pop3Client.setLogListener(this);
 
         initUI();
+        updateAccountStatusUI();
         syncModeComboBox();
         refreshInbox();
         startAutoRefreshTimer();
+    }
+
+    private void updateAccountStatusUI() {
+        setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
+        if (currentAccountLabel != null) {
+            String hostInfo = isGmailMode ? "smtp.gmail.com" : serverHost;
+            currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + hostInfo + ")");
+        }
     }
 
     private void initUI() {
@@ -109,7 +122,7 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         brandPanel.setOpaque(false);
         JLabel logoLabel = new JLabel("✉ Gmail");
         logoLabel.setFont(new Font("Segoe UI", Font.BOLD, 20));
-        logoLabel.setForeground(new Color(234, 67, 53)); // Đỏ Google
+        logoLabel.setForeground(new Color(234, 67, 53));
         brandPanel.add(logoLabel);
 
         JLabel subTitle = new JLabel("|  Client Đa Năng (Localhost & Gmail Thật)");
@@ -153,20 +166,16 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         JPanel centerPanel = new JPanel(new BorderLayout());
         centerPanel.setOpaque(false);
 
-        // Sidebar bên trái
         JPanel sidebar = createSidebar();
         centerPanel.add(sidebar, BorderLayout.WEST);
 
-        // Khung nội dung chính (Danh sách thư + Đọc thư)
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         splitPane.setResizeWeight(0.45);
         splitPane.setBorder(null);
 
-        // Nửa trên: Bảng danh sách thư
         JPanel mailListPanel = createMailListPanel();
         splitPane.setTopComponent(mailListPanel);
 
-        // Nửa dưới: Khung đọc thư chi tiết
         JPanel readingPanel = createReadingPane();
         splitPane.setBottomComponent(readingPanel);
 
@@ -184,7 +193,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         statusLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         statusPanel.add(statusLabel);
 
-        // Khung log thu gọn
         protocolLogArea = new JTextArea(3, 80);
         protocolLogArea.setEditable(false);
         protocolLogArea.setFont(new Font("Consolas", Font.PLAIN, 11));
@@ -207,11 +215,10 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         sidebar.setBackground(new Color(246, 248, 252));
         sidebar.setBorder(new EmptyBorder(16, 12, 16, 12));
 
-        // Nút SOẠN THƯ (Compose) nổi bật phong cách Gmail
         JButton composeBtn = new JButton("+  Soạn Thư Mới");
         composeBtn.setFont(new Font("Segoe UI", Font.BOLD, 13));
         composeBtn.setForeground(new Color(32, 33, 36));
-        composeBtn.setBackground(new Color(194, 231, 255)); // Xanh nhạt Google
+        composeBtn.setBackground(new Color(194, 231, 255));
         composeBtn.setFocusPainted(false);
         composeBtn.setMaximumSize(new Dimension(190, 48));
         composeBtn.setPreferredSize(new Dimension(190, 48));
@@ -225,7 +232,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         sidebar.add(composeBtn);
         sidebar.add(Box.createVerticalStrut(20));
 
-        // Các mục danh mục
         sidebar.add(createNavButton("•  Hộp Thư Đến (Inbox)", () -> {
             currentFolder = "INBOX";
             refreshMailTable();
@@ -309,7 +315,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         panel.setBackground(Color.WHITE);
         panel.setBorder(new EmptyBorder(12, 16, 12, 16));
 
-        // Header thư
         JPanel metaPanel = new JPanel(new GridLayout(4, 1, 2, 2));
         metaPanel.setOpaque(false);
 
@@ -334,7 +339,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         metaPanel.add(viewToLabel);
         metaPanel.add(viewDateLabel);
 
-        // Attachment Button Bar
         downloadAttachBtn = new JButton("📎 Tải tệp đính kèm về máy");
         downloadAttachBtn.setVisible(false);
         downloadAttachBtn.addActionListener(e -> saveAttachmentLocally());
@@ -346,7 +350,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
 
         panel.add(headerWrap, BorderLayout.NORTH);
 
-        // Body thư
         viewBodyArea = new JTextArea();
         viewBodyArea.setEditable(false);
         viewBodyArea.setFont(new Font("Segoe UI", Font.PLAIN, 13));
@@ -441,11 +444,15 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         panel.setBorder(new EmptyBorder(12, 14, 12, 14));
         panel.setBackground(Color.WHITE);
 
-        // Fields
         JPanel top = new JPanel(new GridLayout(3, 2, 6, 6));
         top.setOpaque(false);
 
-        String defaultRecipient = "bob@local.com".equalsIgnoreCase(currentUser) ? "alice@local.com" : "bob@local.com";
+        String defaultRecipient;
+        if (isGmailMode) {
+            defaultRecipient = currentUser;
+        } else {
+            defaultRecipient = "bob@local.com".equalsIgnoreCase(currentUser) ? "alice@local.com" : "bob@local.com";
+        }
         JTextField toField = new JTextField(defaultRecipient);
         JTextField subjectField = new JTextField("Thư thử nghiệm từ " + currentUser);
         JLabel attachInfoLabel = new JLabel("Chưa đính kèm tệp");
@@ -471,7 +478,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
 
         panel.add(top, BorderLayout.NORTH);
 
-        // Body
         JTextArea bodyArea = new JTextArea();
         bodyArea.setFont(new Font("Segoe UI", Font.PLAIN, 13));
         bodyArea.setText("Xin chào,\n\nĐây là bức thư được gửi qua giao thức mạng SMTP.\nNội dung thư được truyền tải theo chuẩn RFC 5321.");
@@ -479,7 +485,6 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         bodyScroll.setBorder(BorderFactory.createLineBorder(new Color(220, 225, 230), 1));
         panel.add(bodyScroll, BorderLayout.CENTER);
 
-        // Bottom send button
         JPanel btnBar = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         btnBar.setOpaque(false);
 
@@ -499,6 +504,22 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
             if (to.isEmpty()) {
                 JOptionPane.showMessageDialog(dialog, "Vui lòng nhập địa chỉ người nhận!", "Lỗi", JOptionPane.WARNING_MESSAGE);
                 return;
+            }
+
+            boolean targetIsRealEmail = to.contains("@") && !to.toLowerCase().endsWith("@local.com");
+            if (!isGmailMode && targetIsRealEmail) {
+                int opt = JOptionPane.showConfirmDialog(dialog,
+                        "Địa chỉ người nhận '" + to + "' là Email thật trên Internet.\n"
+                        + "Để gửi thư tới hộp thư thật (Gmail / VKU Mail), hệ thống cần xác thực qua máy chủ smtp.gmail.com.\n\n"
+                        + "Bạn có muốn đăng nhập tài khoản Gmail / VKU Mail thật (với Mật khẩu ứng dụng 16 ký tự) để gửi ngay không?",
+                        "Xác Nhận Gửi Qua Gmail Thật", JOptionPane.YES_NO_OPTION);
+                if (opt == JOptionPane.YES_OPTION) {
+                    if (!promptGmailLogin()) {
+                        return;
+                    }
+                    updateAccountStatusUI();
+                    syncModeComboBox();
+                }
             }
 
             dialog.dispose();
@@ -535,11 +556,14 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
                         }
 
                         statusLabel.setText("Gửi thư thành công qua SMTP!");
-                        JOptionPane.showMessageDialog(this, "Đã gửi thư thành công qua giao thức SMTP!", "Thông Báo", JOptionPane.INFORMATION_MESSAGE);
+                        String targetServer = isGmailMode ? "Google Gmail (smtp.gmail.com:465)" : ("Mail Server nội bộ (" + serverHost + ":" + smtpPort + ")");
+                        JOptionPane.showMessageDialog(this,
+                                "Đã gửi thư thành công tới " + to + " qua " + targetServer + "!",
+                                "Thông Báo", JOptionPane.INFORMATION_MESSAGE);
                     } else {
                         statusLabel.setText("Gửi thư thất bại!");
                         String errHint = isGmailMode
-                                ? "Gửi thư thất bại! Vui lòng kiểm tra địa chỉ Gmail và Mật khẩu ứng dụng (16 ký tự App Password)."
+                                ? "Gửi thư qua smtp.gmail.com thất bại!\nVui lòng kiểm tra:\n1. Địa chỉ Email (" + currentUser + ")\n2. Mật khẩu ứng dụng Google (Bắt buộc dùng 16 ký tự App Password tại myaccount.google.com/apppasswords, không dùng mật khẩu thường)."
                                 : "Gửi thư thất bại! Vui lòng kiểm tra Mail Server đã được khởi động tại " + serverHost + ":" + smtpPort + " chưa.";
                         JOptionPane.showMessageDialog(this, errHint, "Lỗi", JOptionPane.ERROR_MESSAGE);
                     }
@@ -566,11 +590,13 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
             currentUser = "bob@local.com";
             currentPass = "123456";
         } else {
-            promptGmailLogin();
+            if (!promptGmailLogin()) {
+                syncModeComboBox();
+                return;
+            }
         }
         currentFolder = "INBOX";
-        setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
-        currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
+        updateAccountStatusUI();
         refreshInbox();
     }
 
@@ -579,10 +605,10 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         try {
             if (isGmailMode) {
                 modeComboBox.setSelectedIndex(2);
-            } else if ("alice@local.com".equalsIgnoreCase(currentUser)) {
-                modeComboBox.setSelectedIndex(0);
             } else if ("bob@local.com".equalsIgnoreCase(currentUser)) {
                 modeComboBox.setSelectedIndex(1);
+            } else {
+                modeComboBox.setSelectedIndex(0);
             }
         } finally {
             updatingComboBox = false;
@@ -662,12 +688,14 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
                     if (hostF != null) hostF.setText(ip);
                     if (smtpF != null) smtpF.setText(String.valueOf(sPort));
                     if (pop3F != null) pop3F.setText(String.valueOf(pPort));
-                    currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
+                    updateAccountStatusUI();
                     statusLabel.setText("Đã tìm thấy Mail Server tại " + ip + " (SMTP " + sPort + " / POP3 " + pPort + ")");
                     JOptionPane.showMessageDialog(this,
                             "Đã tìm thấy Mail Server trong mạng LAN!\nIP: " + ip + "\nSMTP Port: " + sPort + "\nPOP3 Port: " + pPort,
                             "Tìm IP LAN Thành Công", JOptionPane.INFORMATION_MESSAGE);
-                    refreshInbox();
+                    if (!isGmailMode) {
+                        refreshInbox();
+                    }
                 } else {
                     statusLabel.setText("Không tìm thấy Mail Server tự động.");
                     JOptionPane.showMessageDialog(this,
@@ -678,27 +706,40 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         }, "Mail-LAN-Discovery").start();
     }
 
-    private void promptGmailLogin() {
-        JTextField gmailField = new JTextField("example@gmail.com");
-        JPasswordField appPassField = new JPasswordField();
+    private boolean promptGmailLogin() {
+        String defaultEmail = !currentUser.endsWith("@local.com") ? currentUser : savedGmailUser;
+        JTextField gmailField = new JTextField(defaultEmail);
+        JPasswordField appPassField = new JPasswordField(savedGmailPass);
 
-        JPanel p = new JPanel(new GridLayout(3, 1, 4, 4));
-        p.add(new JLabel("Nhập địa chỉ Gmail:"));
+        JPanel p = new JPanel(new GridLayout(4, 1, 4, 4));
+        p.add(new JLabel("Nhập địa chỉ Gmail hoặc Email Google Workspace (VD: @gmail.com, @vku.udn.vn):"));
         p.add(gmailField);
-        p.add(new JLabel("Mật khẩu ứng dụng Google (16 ký tự App Password):"));
+        p.add(new JLabel("Mật khẩu ứng dụng Google (Bắt buộc 16 ký tự App Password):"));
         p.add(appPassField);
 
-        int r = JOptionPane.showConfirmDialog(this, p, "Đăng Nhập Gmail Thật", JOptionPane.OK_CANCEL_OPTION);
+        int r = JOptionPane.showConfirmDialog(this, p, "Đăng Nhập Gmail / VKU Mail Thật (smtp.gmail.com)", JOptionPane.OK_CANCEL_OPTION);
         if (r == JOptionPane.OK_OPTION) {
-            isGmailMode = true;
-            currentUser = gmailField.getText().trim();
-            currentPass = new String(appPassField.getPassword()).trim();
-        } else {
-            syncModeComboBox();
+            String entered = gmailField.getText().trim();
+            String pass = new String(appPassField.getPassword()).trim();
+            if (!entered.isEmpty()) {
+                isGmailMode = true;
+                currentUser = entered;
+                currentPass = pass;
+                savedGmailUser = entered;
+                savedGmailPass = pass;
+                return true;
+            }
         }
+        return false;
     }
 
     private void promptAccountConfig() {
+        JComboBox<String> serverModeCombo = new JComboBox<>(new String[]{
+                "Localhost / LAN Mail Server (Nội bộ @local.com)",
+                "Google Gmail / VKU Mail Thật (smtp.gmail.com)"
+        });
+        serverModeCombo.setSelectedIndex(isGmailMode ? 1 : 0);
+
         JTextField uField = new JTextField(currentUser);
         JPasswordField pField = new JPasswordField(currentPass);
         JTextField hostF = new JTextField(serverHost);
@@ -712,35 +753,44 @@ public class MailClientGUI extends JFrame implements SmtpClient.SmtpLogListener,
         hostPanel.add(hostF, BorderLayout.CENTER);
         hostPanel.add(findLanBtn, BorderLayout.EAST);
 
-        JPanel p = new JPanel(new GridLayout(5, 2, 6, 6));
+        JPanel p = new JPanel(new GridLayout(6, 2, 6, 6));
+        p.add(new JLabel("Chế độ máy chủ:"));
+        p.add(serverModeCombo);
         p.add(new JLabel("Tài khoản Email:"));
         p.add(uField);
-        p.add(new JLabel("Mật khẩu:"));
+        p.add(new JLabel("Mật khẩu / App Password:"));
         p.add(pField);
-        p.add(new JLabel("Server Host (IP):"));
+        p.add(new JLabel("LAN Server Host (IP):"));
         p.add(hostPanel);
-        p.add(new JLabel("SMTP Port:"));
+        p.add(new JLabel("LAN SMTP Port:"));
         p.add(smtpF);
-        p.add(new JLabel("POP3 Port:"));
+        p.add(new JLabel("LAN POP3 Port:"));
         p.add(pop3F);
 
         int r = JOptionPane.showConfirmDialog(this, p, "Cấu Hình Kết Nối Mail", JOptionPane.OK_CANCEL_OPTION);
         if (r == JOptionPane.OK_OPTION) {
             String enteredUser = uField.getText().trim().toLowerCase();
+            boolean selectedGmail = (serverModeCombo.getSelectedIndex() == 1);
             if (!enteredUser.isEmpty() && !enteredUser.contains("@")) {
-                enteredUser = enteredUser + "@local.com";
+                enteredUser = enteredUser + (selectedGmail ? "@gmail.com" : "@local.com");
             }
             currentUser = enteredUser;
-            currentPass = new String(pField.getPassword());
+            currentPass = new String(pField.getPassword()).trim();
             serverHost = hostF.getText().trim();
-            isGmailMode = currentUser.endsWith("@gmail.com");
+
+            // Tự động bật chế độ Gmail thật nếu người dùng chọn chế độ Gmail HOẶC nhập email thật (không phải @local.com)
+            isGmailMode = selectedGmail || !currentUser.endsWith("@local.com");
+            if (isGmailMode) {
+                savedGmailUser = currentUser;
+                savedGmailPass = currentPass;
+            }
+
             try {
                 smtpPort = Integer.parseInt(smtpF.getText().trim());
                 pop3Port = Integer.parseInt(pop3F.getText().trim());
             } catch (Exception ignored) {}
             currentFolder = "INBOX";
-            setTitle("GMAIL CLIENT (JAVA SWING) - [" + currentUser + "] - GIAO THỨC SMTP & POP3");
-            currentAccountLabel.setText("Tài khoản: " + currentUser + " (" + serverHost + ")");
+            updateAccountStatusUI();
             syncModeComboBox();
             refreshInbox();
         }

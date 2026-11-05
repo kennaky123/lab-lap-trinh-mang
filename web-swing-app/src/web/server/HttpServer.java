@@ -8,12 +8,11 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Lớp điều khiển chính của Máy Chủ Web Server (HTTP/1.1)
+ * Lớp điều khiển chính của Máy Chủ Web Server (HTTP/1.1) tích hợp CSDL SQLite (browser_data/web.db)
  */
 public class HttpServer {
     public interface ServerEventListener {
@@ -75,7 +74,6 @@ public class HttpServer {
     private final List<PostSubmission> postSubmissions = Collections.synchronizedList(new ArrayList<>());
     private final List<ServerEventListener> listeners = new ArrayList<>();
 
-    // Thống kê các dịch vụ đa phương tiện
     private int pdfHits = 0;
     private int mp3Hits = 0;
     private int mp4Hits = 0;
@@ -84,6 +82,9 @@ public class HttpServer {
 
     public HttpServer(int port) {
         this.port = port;
+        accessLogs.addAll(WebDatabaseManager.getInstance().loadAccessLogs());
+        postSubmissions.addAll(WebDatabaseManager.getInstance().loadPostSubmissions());
+        this.totalRequests = accessLogs.size();
     }
 
     public void addListener(ServerEventListener l) {
@@ -108,6 +109,7 @@ public class HttpServer {
             log(">>> Cổng dịch vụ cục bộ: http://localhost:" + port + "/");
             log(">>> Địa chỉ IP LAN (truy cập từ máy thứ 2 cùng Wi-Fi): http://" + lanIp + ":" + port + "/");
             log(">>> Thư mục gốc tài nguyên: " + root.getAbsolutePath());
+            log(">>> CSDL SQLite: " + new File(HttpConstants.DATA_DIR, "web.db").getAbsolutePath());
             log(">>> Hỗ trợ đa dịch vụ: Trang Web (.html), Tài liệu (.pdf), Âm thanh (.mp3), Video (.mp4)");
             log(">>> Hỗ trợ các phương thức HTTP: GET, HEAD, POST");
 
@@ -214,6 +216,7 @@ public class HttpServer {
         totalRequests++;
         AccessLog logEntry = new AccessLog(method, uri, statusCode, clientIp);
         accessLogs.add(logEntry);
+        WebDatabaseManager.getInstance().insertAccessLog(logEntry);
 
         for (ServerEventListener l : listeners) {
             l.onAccessRecorded(logEntry);
@@ -227,12 +230,14 @@ public class HttpServer {
         if (lower.endsWith(".pdf")) pdfHits++;
         else if (lower.endsWith(".mp3")) mp3Hits++;
         else if (lower.endsWith(".mp4")) mp4Hits++;
+        WebDatabaseManager.getInstance().incrementResourceHit(fileName);
         notifyStats();
     }
 
     public synchronized void savePostSubmission(String name, String id, String content, String ip) {
         PostSubmission sub = new PostSubmission(name, id, content, ip);
         postSubmissions.add(sub);
+        WebDatabaseManager.getInstance().insertPostSubmission(sub);
         for (ServerEventListener l : listeners) {
             l.onPostSubmitted(sub);
         }
@@ -247,12 +252,15 @@ public class HttpServer {
 
     private void notifyStats() {
         for (ServerEventListener l : listeners) {
-            l.onStatsUpdated(totalRequests, pdfHits, mp3Hits, mp4Hits, totalBytesTransferred);
+            l.onStatsUpdated(totalRequests, pdfHits, mp3Hits, mp4Count(), totalBytesTransferred);
         }
+    }
+
+    private int mp4Count() {
+        return mp4Hits;
     }
 
     public List<AccessLog> getAccessLogs() { return new ArrayList<>(accessLogs); }
     public List<PostSubmission> getPostSubmissions() { return new ArrayList<>(postSubmissions); }
     public boolean isRunning() { return isRunning; }
 }
-

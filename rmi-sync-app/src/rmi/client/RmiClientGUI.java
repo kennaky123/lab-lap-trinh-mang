@@ -2,6 +2,7 @@ package rmi.client;
 
 import rmi.common.IDataSyncService;
 import rmi.common.RecordItem;
+import rmi.common.RmiUser;
 import rmi.ui.ModernScrollBarUI;
 
 import javax.swing.*;
@@ -20,10 +21,10 @@ import java.util.List;
 
 /**
  * Giao diện RMI Client (chạy trên các máy ảo hoặc máy trạm):
+ * - Đăng nhập & Phân quyền theo vai trò (ADMIN, EDITOR, VIEWER) từ SQLite trên Server
  * - Kết nối tới Server 1 hoặc Server 2 qua RMI Registry
  * - Hỗ trợ Auto Failover: Tự động chuyển server khi một server mất kết nối
- * - Thao tác Thêm / Sửa / Xóa dữ liệu phân tán
- * - Công cụ chứng minh đồng bộ hóa hai chiều (Two-Way Replication)
+ * - Thao tác Thêm / Sửa / Xóa dữ liệu phân tán theo quyền hạn được cấp
  */
 public class RmiClientGUI extends JFrame {
 
@@ -35,9 +36,16 @@ public class RmiClientGUI extends JFrame {
     private int activeServerIndex = 1; // 1 hoặc 2
     private IDataSyncService activeService;
 
+    // Thông tin tài khoản đang đăng nhập
+    private RmiUser currentUser = RmiUser.createByRole("admin", "123456", "ADMIN");
+    private String currentUsername = "admin";
+    private String currentPassword = "123456";
+
     // UI Components
     private JComboBox<String> serverSelectorCombo;
+    private JComboBox<String> quickRoleCombo;
     private JLabel connectionStatusLabel;
+    private JLabel userBadgeLabel;
     private JCheckBox autoFailoverCheckBox;
 
     private JTextField idField;
@@ -45,17 +53,23 @@ public class RmiClientGUI extends JFrame {
     private JTextField categoryField;
     private JTextField valueField;
 
+    private JButton addBtn;
+    private JButton updateBtn;
+    private JButton deleteBtn;
+
     private DefaultTableModel tableModel;
     private JTable dataTable;
     private JTextField searchField;
+    private boolean updatingRoleCombo = false;
 
     public RmiClientGUI() {
-        setTitle("RMI CLIENT (MÁY ẢO / MÁY TRẠM) - THAO TÁC DỮ LIỆU ĐỒNG BỘ");
-        setSize(1020, 700);
+        setTitle("RMI CLIENT - ĐĂNG NHẬP & PHÂN QUYỀN DỮ LIỆU ĐỒNG BỘ");
+        setSize(1080, 720);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
         initUI();
+        applyUserPermissionsUI();
         connectToServer(1);
     }
 
@@ -68,8 +82,8 @@ public class RmiClientGUI extends JFrame {
         mainPanel.setBorder(new EmptyBorder(12, 12, 12, 12));
         mainPanel.setBackground(new Color(245, 247, 250));
 
-        // ==================== 1. TOP HEADER & SERVER SELECTOR ====================
-        JPanel topHeader = new JPanel(new BorderLayout(10, 0));
+        // ==================== 1. TOP HEADER & SERVER / AUTH SELECTOR ====================
+        JPanel topHeader = new JPanel(new BorderLayout(10, 6));
         topHeader.setBackground(Color.WHITE);
         topHeader.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(220, 225, 235), 1),
@@ -78,7 +92,7 @@ public class RmiClientGUI extends JFrame {
 
         JPanel titleBlock = new JPanel(new GridLayout(2, 1, 2, 2));
         titleBlock.setOpaque(false);
-        JLabel titleLabel = new JLabel("ỨNG DỤNG RMI CLIENT (HỖ TRỢ ĐA MÁY CHỦ)");
+        JLabel titleLabel = new JLabel("ỨNG DỤNG RMI CLIENT (PHÂN QUYỀN SQLITE & ĐỒNG BỘ ĐA MÁY CHỦ)");
         titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 15));
         titleLabel.setForeground(new Color(24, 119, 242));
 
@@ -91,7 +105,7 @@ public class RmiClientGUI extends JFrame {
         JPanel serverControl = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         serverControl.setOpaque(false);
 
-        serverControl.add(new JLabel("Máy Chủ Đang Kết Nối:"));
+        serverControl.add(new JLabel("Máy Chủ:"));
         serverSelectorCombo = new JComboBox<>(new String[]{
                 "Server 1 (" + server1Host + ":" + server1Port + ")",
                 "Server 2 (" + server2Host + ":" + server2Port + ")"
@@ -104,7 +118,7 @@ public class RmiClientGUI extends JFrame {
         });
         serverControl.add(serverSelectorCombo);
 
-        autoFailoverCheckBox = new JCheckBox("Tự động chuyển đổi dự phòng (Auto Failover)", true);
+        autoFailoverCheckBox = new JCheckBox("Auto Failover", true);
         autoFailoverCheckBox.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         serverControl.add(autoFailoverCheckBox);
 
@@ -112,7 +126,7 @@ public class RmiClientGUI extends JFrame {
         findLanBtn.addActionListener(e -> discoverRmiServerInLan(null, null));
         serverControl.add(findLanBtn);
 
-        JButton configIpBtn = new JButton("⚙ Đổi IP Máy Chủ");
+        JButton configIpBtn = new JButton("⚙ Đổi IP");
         configIpBtn.addActionListener(e -> promptChangeServerIps());
         serverControl.add(configIpBtn);
 
@@ -120,8 +134,46 @@ public class RmiClientGUI extends JFrame {
         refreshBtn.addActionListener(e -> refreshData());
         serverControl.add(refreshBtn);
 
+        // Thanh Đăng nhập & Phân quyền ở dòng thứ 2 của Header
+        JPanel authBar = new JPanel(new BorderLayout(8, 0));
+        authBar.setBackground(new Color(238, 244, 255));
+        authBar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(195, 215, 250), 1),
+                new EmptyBorder(6, 10, 6, 10)
+        ));
+
+        userBadgeLabel = new JLabel();
+        userBadgeLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        userBadgeLabel.setForeground(new Color(20, 90, 190));
+
+        JPanel authActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        authActions.setOpaque(false);
+        authActions.add(new JLabel("Chuyển nhanh tài khoản test:"));
+        quickRoleCombo = new JComboBox<>(new String[]{
+                "admin (ADMIN - Toàn quyền: Xem, Thêm, Sửa, Xóa)",
+                "editor (EDITOR - Cán bộ: Xem, Thêm, Sửa)",
+                "sinhvien (VIEWER - Sinh viên: Chỉ Xem)"
+        });
+        quickRoleCombo.addActionListener(e -> {
+            if (updatingRoleCombo) return;
+            int idx = quickRoleCombo.getSelectedIndex();
+            if (idx == 0) performLogin("admin", "123456", false);
+            else if (idx == 1) performLogin("editor", "123456", false);
+            else if (idx == 2) performLogin("sinhvien", "123456", false);
+        });
+        authActions.add(quickRoleCombo);
+
+        JButton loginBtn = new JButton("🔑 Đăng Nhập Tài Khoản Khác...");
+        loginBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        loginBtn.addActionListener(e -> promptLoginDialog());
+        authActions.add(loginBtn);
+
+        authBar.add(userBadgeLabel, BorderLayout.WEST);
+        authBar.add(authActions, BorderLayout.EAST);
+
         topHeader.add(titleBlock, BorderLayout.WEST);
         topHeader.add(serverControl, BorderLayout.EAST);
+        topHeader.add(authBar, BorderLayout.SOUTH);
 
         mainPanel.add(topHeader, BorderLayout.NORTH);
 
@@ -141,7 +193,7 @@ public class RmiClientGUI extends JFrame {
 
         // Table
         tableModel = new DefaultTableModel(new String[]{
-                "Mã ID", "Họ Tên / Bản Ghi", "Ngành Học / Phân Loại", "Điểm / Giá Trị", "Thời Gian Sửa Đổi", "Server Cập Nhật Lần Cuối"
+                "Mã ID", "Họ Tên / Bản Ghi", "Ngành Học / Phân Loại", "Điểm / Giá Trị", "Thời Gian Sửa Đổi", "Server / Người Cập Nhật"
         }, 0) {
             @Override
             public boolean isCellEditable(int r, int c) { return false; }
@@ -203,7 +255,7 @@ public class RmiClientGUI extends JFrame {
         JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
         actionsBar.setOpaque(false);
 
-        JButton addBtn = new JButton("+ Thêm Mới");
+        addBtn = new JButton("+ Thêm Mới");
         addBtn.setBackground(new Color(40, 167, 69));
         addBtn.setForeground(Color.WHITE);
         addBtn.setContentAreaFilled(false);
@@ -211,7 +263,7 @@ public class RmiClientGUI extends JFrame {
         addBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         addBtn.addActionListener(e -> doAddRecord());
 
-        JButton updateBtn = new JButton("Sửa Bản Ghi");
+        updateBtn = new JButton("Sửa Bản Ghi");
         updateBtn.setBackground(new Color(242, 153, 74));
         updateBtn.setForeground(Color.WHITE);
         updateBtn.setContentAreaFilled(false);
@@ -219,7 +271,7 @@ public class RmiClientGUI extends JFrame {
         updateBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
         updateBtn.addActionListener(e -> doUpdateRecord());
 
-        JButton deleteBtn = new JButton("Xóa Bản Ghi");
+        deleteBtn = new JButton("Xóa Bản Ghi");
         deleteBtn.setBackground(new Color(220, 53, 69));
         deleteBtn.setForeground(Color.WHITE);
         deleteBtn.setContentAreaFilled(false);
@@ -241,6 +293,103 @@ public class RmiClientGUI extends JFrame {
         add(mainPanel);
     }
 
+    // ==================== ĐĂNG NHẬP & ÁP DỤNG PHÂN QUYỀN ====================
+
+    private void promptLoginDialog() {
+        JTextField uField = new JTextField(currentUsername);
+        JPasswordField pField = new JPasswordField(currentPassword);
+
+        JPanel p = new JPanel(new GridLayout(3, 2, 6, 6));
+        p.add(new JLabel("Tên đăng nhập (Username):"));
+        p.add(uField);
+        p.add(new JLabel("Mật khẩu (Password):"));
+        p.add(pField);
+        p.add(new JLabel("Gợi ý tài khoản mẫu:"));
+        p.add(new JLabel("admin / editor / sinhvien (MK: 123456)"));
+
+        int res = JOptionPane.showConfirmDialog(this, p, "Đăng Nhập Phân Quyền RMI", JOptionPane.OK_CANCEL_OPTION);
+        if (res == JOptionPane.OK_OPTION) {
+            performLogin(uField.getText().trim(), new String(pField.getPassword()).trim(), true);
+        }
+    }
+
+    private void performLogin(String username, String password, boolean showSuccessDialog) {
+        if (activeService == null) {
+            currentUsername = username;
+            currentPassword = password;
+            return;
+        }
+        new Thread(() -> {
+            try {
+                RmiUser loggedIn = activeService.login(username, password);
+                SwingUtilities.invokeLater(() -> {
+                    if (loggedIn != null) {
+                        currentUser = loggedIn;
+                        currentUsername = loggedIn.getUsername();
+                        currentPassword = password;
+                        applyUserPermissionsUI();
+                        if (showSuccessDialog) {
+                            JOptionPane.showMessageDialog(this,
+                                    "Đăng nhập thành công!\n"
+                                    + "Tài khoản: " + loggedIn.getUsername() + "\n"
+                                    + "Vai trò: " + loggedIn.getRole() + "\n"
+                                    + "Quyền hạn: " + loggedIn.getPermissionSummary(),
+                                    "Xác Thực RMI Thành Công", JOptionPane.INFORMATION_MESSAGE);
+                        }
+                    } else {
+                        JOptionPane.showMessageDialog(this,
+                                "Đăng nhập thất bại! Sai tên tài khoản hoặc mật khẩu trên CSDL SQLite của Server.",
+                                "Từ Chối Truy Cập", JOptionPane.ERROR_MESSAGE);
+                        syncQuickRoleCombo();
+                    }
+                });
+            } catch (Exception e) {
+                handleConnectionLoss("đăng nhập");
+            }
+        }).start();
+    }
+
+    private void applyUserPermissionsUI() {
+        if (currentUser == null) return;
+        userBadgeLabel.setText("👤 Đang đăng nhập: " + currentUser.getUsername()
+                + "  |  Vai trò: " + currentUser.getRole()
+                + "  |  Quyền hạn: [" + currentUser.getPermissionSummary() + "]");
+
+        setTitle("RMI CLIENT - [" + currentUser.getUsername() + " - " + currentUser.getRole() + "] - ĐỒNG BỘ DỮ LIỆU");
+
+        boolean canAdd = currentUser.isCanAdd();
+        boolean canUpdate = currentUser.isCanUpdate();
+        boolean canDelete = currentUser.isCanDelete();
+
+        addBtn.setEnabled(canAdd);
+        addBtn.setBackground(canAdd ? new Color(40, 167, 69) : new Color(180, 185, 190));
+
+        updateBtn.setEnabled(canUpdate);
+        updateBtn.setBackground(canUpdate ? new Color(242, 153, 74) : new Color(180, 185, 190));
+
+        deleteBtn.setEnabled(canDelete);
+        deleteBtn.setBackground(canDelete ? new Color(220, 53, 69) : new Color(180, 185, 190));
+
+        boolean canEditFields = canAdd || canUpdate;
+        idField.setEditable(canEditFields);
+        nameField.setEditable(canEditFields);
+        categoryField.setEditable(canEditFields);
+        valueField.setEditable(canEditFields);
+
+        syncQuickRoleCombo();
+    }
+
+    private void syncQuickRoleCombo() {
+        updatingRoleCombo = true;
+        try {
+            if ("admin".equalsIgnoreCase(currentUsername)) quickRoleCombo.setSelectedIndex(0);
+            else if ("editor".equalsIgnoreCase(currentUsername)) quickRoleCombo.setSelectedIndex(1);
+            else if ("sinhvien".equalsIgnoreCase(currentUsername)) quickRoleCombo.setSelectedIndex(2);
+        } finally {
+            updatingRoleCombo = false;
+        }
+    }
+
     // ==================== KẾT NỐI RMI & FAILOVER ====================
 
     private void connectToServer(int serverIndex) {
@@ -257,10 +406,15 @@ public class RmiClientGUI extends JFrame {
                 boolean alive = activeService.ping();
 
                 if (alive) {
+                    RmiUser authUser = activeService.login(currentUsername, currentPassword);
+                    if (authUser != null) {
+                        currentUser = authUser;
+                    }
                     SwingUtilities.invokeLater(() -> {
                         connectionStatusLabel.setText("● Đang kết nối: Server " + activeServerIndex + " (" + host + ":" + port + ") - ONLINE");
                         connectionStatusLabel.setForeground(new Color(40, 167, 69));
                         serverSelectorCombo.setSelectedIndex(activeServerIndex - 1);
+                        applyUserPermissionsUI();
                         refreshData();
                     });
                 }
@@ -304,6 +458,10 @@ public class RmiClientGUI extends JFrame {
     }
 
     private void doAddRecord() {
+        if (currentUser != null && !currentUser.isCanAdd()) {
+            JOptionPane.showMessageDialog(this, "Tài khoản '" + currentUser.getUsername() + "' không có quyền Thêm bản ghi!", "Từ Chối Quyền Hạn", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         String id = idField.getText().trim();
         String name = nameField.getText().trim();
         String cat = categoryField.getText().trim();
@@ -320,7 +478,7 @@ public class RmiClientGUI extends JFrame {
             return;
         }
 
-        RecordItem item = new RecordItem(id, name, cat, val, "Client -> Server " + activeServerIndex);
+        RecordItem item = new RecordItem(id, name, cat, val, currentUsername + " -> Server " + activeServerIndex);
 
         new Thread(() -> {
             try {
@@ -329,7 +487,7 @@ public class RmiClientGUI extends JFrame {
                     if (ok) {
                         JOptionPane.showMessageDialog(this,
                                 "Đã thêm bản ghi " + id + " thành công trên Server " + activeServerIndex + "!\n" +
-                                "Dữ liệu đã được tự động đồng bộ hóa sang Server còn lại qua RMI.",
+                                "Dữ liệu đã được lưu vào SQLite (records.db) và đồng bộ sang Server còn lại qua RMI.",
                                 "Thành Công", JOptionPane.INFORMATION_MESSAGE);
                         clearForm();
                         refreshData();
@@ -344,6 +502,10 @@ public class RmiClientGUI extends JFrame {
     }
 
     private void doUpdateRecord() {
+        if (currentUser != null && !currentUser.isCanUpdate()) {
+            JOptionPane.showMessageDialog(this, "Tài khoản '" + currentUser.getUsername() + "' không có quyền Sửa bản ghi!", "Từ Chối Quyền Hạn", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         String id = idField.getText().trim();
         String name = nameField.getText().trim();
         String cat = categoryField.getText().trim();
@@ -355,13 +517,13 @@ public class RmiClientGUI extends JFrame {
             return;
         }
 
-        RecordItem item = new RecordItem(id, name, cat, val, "Client -> Server " + activeServerIndex);
+        RecordItem item = new RecordItem(id, name, cat, val, currentUsername + " -> Server " + activeServerIndex);
         new Thread(() -> {
             try {
                 boolean ok = activeService.updateRecord(item);
                 SwingUtilities.invokeLater(() -> {
                     if (ok) {
-                        JOptionPane.showMessageDialog(this, "Cập nhật bản ghi " + id + " thành công (đã đồng bộ 2 Server)!", "Thành Công", JOptionPane.INFORMATION_MESSAGE);
+                        JOptionPane.showMessageDialog(this, "Cập nhật bản ghi " + id + " thành công (đã đồng bộ SQLite 2 Server)!", "Thành Công", JOptionPane.INFORMATION_MESSAGE);
                         clearForm();
                         refreshData();
                     } else {
@@ -375,6 +537,10 @@ public class RmiClientGUI extends JFrame {
     }
 
     private void doDeleteRecord() {
+        if (currentUser != null && !currentUser.isCanDelete()) {
+            JOptionPane.showMessageDialog(this, "Tài khoản '" + currentUser.getUsername() + "' không có quyền Xóa bản ghi!", "Từ Chối Quyền Hạn", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         String id = idField.getText().trim();
         if (id.isEmpty()) return;
         int confirm = JOptionPane.showConfirmDialog(this, "Bạn có chắc muốn xóa bản ghi " + id + "? (Hành động sẽ đồng bộ xóa trên cả 2 Server)", "Xác Nhận Xóa", JOptionPane.YES_NO_OPTION);
@@ -530,4 +696,3 @@ public class RmiClientGUI extends JFrame {
         });
     }
 }
-
