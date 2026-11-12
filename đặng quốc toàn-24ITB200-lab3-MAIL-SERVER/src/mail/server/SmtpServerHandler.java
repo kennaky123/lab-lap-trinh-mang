@@ -1,16 +1,22 @@
 package mail.server;
 
 import mail.common.EmailMessage;
+import mail.common.MailAccount;
 
 import java.io.*;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Xử lý phiên kết nối gửi thư theo giao thức SMTP (RFC 5321)
+ * Xử lý phiên kết nối gửi thư theo giao thức SMTP (RFC 5321 & RFC 4954)
+ * Hỗ trợ đầy đủ cả Java Mail Client lẫn Mozilla Thunderbird (AUTH PLAIN / LOGIN, nhiều người nhận)
  */
 public class SmtpServerHandler implements Runnable {
     private final Socket socket;
@@ -19,7 +25,7 @@ public class SmtpServerHandler implements Runnable {
     private BufferedWriter writer;
 
     private String mailFrom = "";
-    private String rcptTo = "";
+    private final List<String> rcptToList = new ArrayList<>();
     private final String clientIp;
 
     public SmtpServerHandler(Socket socket, MailServer server) {
@@ -41,7 +47,8 @@ public class SmtpServerHandler implements Runnable {
                 line = line.trim();
                 if (line.isEmpty()) continue;
 
-                server.log("[SMTP CMD từ " + clientIp + "]: " + line);
+                String logLine = line.toUpperCase().startsWith("AUTH ") ? "AUTH ********" : line;
+                server.log("[SMTP CMD từ " + clientIp + "]: " + logLine);
                 if (handleCommand(line)) {
                     break;
                 }
@@ -58,23 +65,30 @@ public class SmtpServerHandler implements Runnable {
         String upper = line.toUpperCase();
 
         if (upper.startsWith("EHLO")) {
-            sendResponse("250-mailserver.local greets " + clientIp + "\r\n250-8BITMIME\r\n250 OK");
+            sendResponse("250-mailserver.local greets " + clientIp + "\r\n"
+                    + "250-SIZE 26214400\r\n"
+                    + "250-8BITMIME\r\n"
+                    + "250-SMTPUTF8\r\n"
+                    + "250-AUTH PLAIN LOGIN\r\n"
+                    + "250 OK");
         } else if (upper.startsWith("HELO")) {
             sendResponse("250 mailserver.local greets " + clientIp);
+        } else if (upper.startsWith("AUTH PLAIN")) {
+            handleAuthPlain(line.length() > 10 ? line.substring(10).trim() : "");
         } else if (upper.startsWith("AUTH LOGIN")) {
-            sendResponse("334 VXNlcm5hbWU6");
-            reader.readLine();
-            sendResponse("334 UGFzc3dvcmQ6");
-            reader.readLine();
-            sendResponse("235 2.7.0 Authentication successful");
+            handleAuthLogin(line.length() > 10 ? line.substring(10).trim() : "");
         } else if (upper.startsWith("MAIL FROM:")) {
             mailFrom = normalizeAddress(extractEmail(line.substring(10).trim()));
+            rcptToList.clear();
             sendResponse("250 2.1.0 Sender <" + mailFrom + "> OK");
         } else if (upper.startsWith("RCPT TO:")) {
-            rcptTo = normalizeAddress(extractEmail(line.substring(8).trim()));
-            sendResponse("250 2.1.5 Recipient <" + rcptTo + "> OK");
+            String rcpt = normalizeAddress(extractEmail(line.substring(8).trim()));
+            if (!rcpt.isEmpty() && !rcptToList.contains(rcpt)) {
+                rcptToList.add(rcpt);
+            }
+            sendResponse("250 2.1.5 Recipient <" + rcpt + "> OK");
         } else if (upper.equals("DATA")) {
-            if (mailFrom.isEmpty() || rcptTo.isEmpty()) {
+            if (mailFrom.isEmpty() || rcptToList.isEmpty()) {
                 sendResponse("503 Cần chỉ định MAIL FROM và RCPT TO trước khi gửi DATA");
             } else {
                 sendResponse("354 Kết thúc thư bằng dòng chứa một dấu chấm duy nhất <CRLF>.<CRLF>");
@@ -82,7 +96,7 @@ public class SmtpServerHandler implements Runnable {
             }
         } else if (upper.equals("RSET")) {
             mailFrom = "";
-            rcptTo = "";
+            rcptToList.clear();
             sendResponse("250 OK");
         } else if (upper.equals("NOOP")) {
             sendResponse("250 OK");
@@ -93,6 +107,70 @@ public class SmtpServerHandler implements Runnable {
             sendResponse("500 Command unrecognized (" + line + ")");
         }
         return false;
+    }
+
+    private void handleAuthPlain(String initialArg) throws IOException {
+        String b64 = initialArg;
+        if (b64.isEmpty()) {
+            sendResponse("334 ");
+            String next = reader.readLine();
+            if (next == null || "*".equals(next.trim())) {
+                sendResponse("501 Authentication cancelled");
+                return;
+            }
+            b64 = next.trim();
+        }
+        try {
+            byte[] decoded = Base64.getDecoder().decode(b64);
+            String payload = new String(decoded, StandardCharsets.UTF_8);
+            String[] parts = payload.split("\0", -1);
+            String user = parts.length >= 2 ? parts[1] : "";
+            if (user.isEmpty() && parts.length >= 1) user = parts[0];
+            String pass = parts.length >= 3 ? parts[2] : (parts.length == 2 ? parts[1] : "");
+            verifyAndRespondAuth(user, pass);
+        } catch (Exception e) {
+            sendResponse("535 5.7.8 Authentication credentials invalid");
+        }
+    }
+
+    private void handleAuthLogin(String initialArg) throws IOException {
+        try {
+            String userB64 = initialArg;
+            if (userB64.isEmpty()) {
+                sendResponse("334 VXNlcm5hbWU6");
+                String next = reader.readLine();
+                if (next == null || "*".equals(next.trim())) {
+                    sendResponse("501 Authentication cancelled");
+                    return;
+                }
+                userB64 = next.trim();
+            }
+            sendResponse("334 UGFzc3dvcmQ6");
+            String passB64 = reader.readLine();
+            if (passB64 == null || "*".equals(passB64.trim())) {
+                sendResponse("501 Authentication cancelled");
+                return;
+            }
+            String user = new String(Base64.getDecoder().decode(userB64), StandardCharsets.UTF_8);
+            String pass = new String(Base64.getDecoder().decode(passB64.trim()), StandardCharsets.UTF_8);
+            verifyAndRespondAuth(user, pass);
+        } catch (Exception e) {
+            sendResponse("535 5.7.8 Authentication credentials invalid");
+        }
+    }
+
+    private void verifyAndRespondAuth(String user, String pass) throws IOException {
+        MailAccount acc = MailDatabaseManager.getInstance().authenticate(user, pass);
+        if (acc != null) {
+            MailDatabaseManager.getInstance().logActivity("SMTP", acc.getEmail(), "LOGIN",
+                    "Đăng nhập SMTP thành công (" + clientIp + ")", true);
+            server.notifyStats();
+            sendResponse("235 2.7.0 Authentication successful");
+        } else {
+            MailDatabaseManager.getInstance().logActivity("SMTP", user, "LOGIN_FAILED",
+                    "Sai mật khẩu SMTP (" + clientIp + ")", false);
+            sendResponse("535 5.7.8 Authentication credentials invalid");
+        }
     }
 
     private void readDataContent() throws IOException {
@@ -108,16 +186,21 @@ public class SmtpServerHandler implements Runnable {
             raw.append(line).append("\r\n");
         }
 
-        EmailMessage msg = EmailMessage.fromRfc822String(raw.toString(), mailFrom, rcptTo);
-        msg.setFrom(mailFrom);
-        msg.setTo(rcptTo);
+        String primaryRcpt = rcptToList.get(0);
+        EmailMessage parsed = EmailMessage.fromRfc822String(raw.toString(), mailFrom, primaryRcpt);
 
-        MailDatabaseManager.getInstance().saveEmail(msg);
-        MailDatabaseManager.getInstance().logActivity("SMTP", mailFrom, "SEND_EMAIL",
-                "Gửi tới " + rcptTo + " (" + msg.getSubject() + ")", true);
+        for (String rcpt : rcptToList) {
+            EmailMessage msg = new EmailMessage(mailFrom, rcpt, parsed.getSubject(), parsed.getBody());
+            msg.setId(UUID.randomUUID().toString());
+            msg.setAttachmentName(parsed.getAttachmentName());
+            msg.setAttachmentData(parsed.getAttachmentData());
+
+            MailDatabaseManager.getInstance().saveEmail(msg);
+            MailDatabaseManager.getInstance().logActivity("SMTP", mailFrom, "SEND_EMAIL",
+                    "Gửi tới " + rcpt + " (" + msg.getSubject() + ")", true);
+            server.log("[SMTP THÀNH CÔNG] Đã lưu thư từ " + mailFrom + " gửi tới " + rcpt + " vào CSDL!");
+        }
         server.notifyStats();
-
-        server.log("[SMTP THÀNH CÔNG] Đã lưu thư từ " + mailFrom + " gửi tới " + rcptTo + " vào CSDL!");
         sendResponse("250 2.0.0 OK: Đã tiếp nhận và lưu thư thành công vào CSDL Server");
     }
 

@@ -86,4 +86,11 @@ Hệ thống sẽ:
    - Bạn có thể gửi thư thực tế đến bất kỳ địa chỉ email nào trên thế giới!
 4. **Kiểm tra CSDL trên Server:**
    - Mở cửa sổ Mail Server Dashboard ➔ Xem tab **CSDL Tài Khoản Email**, **CSDL Thư Điện Tử** và **CSDL Lịch Sử Giao Dịch** để giáo viên kiểm tra dữ liệu lưu trên đĩa.
+5. **Kết nối bằng Mozilla Thunderbird:**
+   - Mở tab **Kết Nối Thunderbird** trên Mail Server Dashboard để xem thông số cổng/IP LAN và bấm nút **Kiểm Tra Chuẩn Thunderbird** để kiểm thử trực tiếp.
+   - Trên Thunderbird chọn **Manual config (Cấu hình thủ công)**:
+     - **Incoming (POP3):** Host `localhost` (hoặc IP LAN), Port `1110`, Security: `None`, Auth: `Normal password`, Username: `alice@local.com`.
+     - **Outgoing (SMTP):** Host `localhost` (hoặc IP LAN), Port `2525`, Security: `None`, Auth: `Normal password`, Username: `alice@local.com`.
+     - Bấm **Done** ➔ Tích **I understand the risks** ➔ **Confirm** để gửi/nhận thư trực tiếp giữa Thunderbird và Mail Server / Gmail Client.
+
 

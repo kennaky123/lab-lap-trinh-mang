@@ -8,7 +8,12 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.io.*;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 
@@ -30,6 +35,10 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
     private DefaultTableModel accountTableModel;
     private DefaultTableModel emailTableModel;
     private DefaultTableModel logTableModel;
+
+    private JComboBox<String> tbAccountCombo;
+    private JTextArea tbInfoArea;
+    private JTextArea tbTestResultArea;
 
     public MailServerGUI() {
         setTitle("MÁY CHỦ MAIL SERVER (SMTP 2525 & POP3 1110) - QUẢN TRỊ CSDL");
@@ -197,12 +206,16 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         logDbTab.add(logDbBar, BorderLayout.SOUTH);
         tabbedPane.addTab("  CSDL Lịch Sử Giao Dịch (Audit Log)  ", logDbTab);
 
+        // Tab 5: Kết nối Mozilla Thunderbird
+        tabbedPane.addTab("  Kết Nối Thunderbird  ", createThunderbirdTab());
+
         mainPanel.add(tabbedPane, BorderLayout.CENTER);
         add(mainPanel);
 
         loadAccountsToTable();
         loadEmailsToTable();
         loadLogsToTable();
+        refreshThunderbirdInfo();
         onStatsUpdated(
                 MailDatabaseManager.getInstance().getAllAccounts().size(),
                 MailDatabaseManager.getInstance().getTotalEmailCount()
@@ -249,6 +262,7 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
             statusLabel.setText("<html><div style='text-align: center; padding: 6px;'>"
                     + "<span style='font-size: 10px; color: #555555;'>Trạng Thái Máy Chủ</span><br>"
                     + "<b style='font-size: 13px; color: #28a745;'>Đang Chạy (SMTP " + actualSmtp + " / POP3 " + actualPop3 + ")</b></div></html>");
+            refreshThunderbirdInfo();
         }
     }
 
@@ -262,7 +276,266 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
             statusLabel.setText("<html><div style='text-align: center; padding: 6px;'>"
                     + "<span style='font-size: 10px; color: #555555;'>Trạng Thái Máy Chủ</span><br>"
                     + "<b style='font-size: 13px; color: #dc3545;'>Đã Dừng</b></div></html>");
+            refreshThunderbirdInfo();
         }
+    }
+
+    private JPanel createThunderbirdTab() {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+        JPanel topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        topBar.add(new JLabel("Chọn tài khoản dùng trên Thunderbird:"));
+        tbAccountCombo = new JComboBox<>();
+        tbAccountCombo.setPreferredSize(new Dimension(240, 26));
+        tbAccountCombo.addActionListener(e -> refreshThunderbirdInfo());
+        topBar.add(tbAccountCombo);
+
+        JButton copyBtn = new JButton("Sao Chép Thông Số");
+        copyBtn.addActionListener(e -> {
+            if (tbInfoArea != null) {
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(tbInfoArea.getText()), null);
+                JOptionPane.showMessageDialog(this, "Đã sao chép cấu hình kết nối Thunderbird vào Clipboard!");
+            }
+        });
+        topBar.add(copyBtn);
+
+        JButton testBtn = new JButton("Kiểm Tra Chuẩn Thunderbird (SMTP AUTH & POP3 CAPA/UIDL)");
+        testBtn.setBackground(new Color(0, 123, 255));
+        testBtn.setForeground(Color.WHITE);
+        testBtn.setContentAreaFilled(false);
+        testBtn.setOpaque(true);
+        testBtn.setFocusPainted(false);
+        testBtn.addActionListener(e -> runThunderbirdProtocolTest());
+        topBar.add(testBtn);
+
+        JButton launchTbBtn = new JButton("Mở Thunderbird");
+        launchTbBtn.addActionListener(e -> launchThunderbird());
+        topBar.add(launchTbBtn);
+
+        panel.add(topBar, BorderLayout.NORTH);
+
+        tbInfoArea = new JTextArea();
+        tbInfoArea.setEditable(false);
+        tbInfoArea.setFont(new Font("Consolas", Font.PLAIN, 13));
+        tbInfoArea.setBackground(Color.WHITE);
+        tbInfoArea.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+        tbTestResultArea = new JTextArea();
+        tbTestResultArea.setEditable(false);
+        tbTestResultArea.setFont(new Font("Consolas", Font.PLAIN, 12));
+        tbTestResultArea.setBackground(new Color(28, 30, 36));
+        tbTestResultArea.setForeground(new Color(180, 240, 190));
+        tbTestResultArea.setText("Nhấn 'Kiểm Tra Chuẩn Thunderbird' để kiểm thử bắt tay SMTP AUTH & POP3 CAPA/UIDL trực tiếp...\n");
+
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(tbInfoArea), new JScrollPane(tbTestResultArea));
+        split.setResizeWeight(0.62);
+        panel.add(split, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private void refreshThunderbirdInfo() {
+        if (tbAccountCombo == null || tbInfoArea == null) return;
+
+        List<MailAccount> accounts = MailDatabaseManager.getInstance().getAllAccounts();
+        boolean itemsChanged = tbAccountCombo.getItemCount() != accounts.size();
+        if (!itemsChanged) {
+            for (int i = 0; i < accounts.size(); i++) {
+                if (!accounts.get(i).getEmail().equals(tbAccountCombo.getItemAt(i))) {
+                    itemsChanged = true;
+                    break;
+                }
+            }
+        }
+        if (itemsChanged) {
+            Object prev = tbAccountCombo.getSelectedItem();
+            tbAccountCombo.removeAllItems();
+            for (MailAccount acc : accounts) {
+                tbAccountCombo.addItem(acc.getEmail());
+            }
+            if (prev != null) {
+                tbAccountCombo.setSelectedItem(prev);
+            } else if (!accounts.isEmpty()) {
+                tbAccountCombo.setSelectedIndex(0);
+            }
+        }
+
+        Object selectedItem = tbAccountCombo.getSelectedItem();
+        MailAccount selectedAcc = null;
+        for (MailAccount acc : accounts) {
+            if (selectedItem != null && selectedItem.equals(acc.getEmail())) {
+                selectedAcc = acc;
+                break;
+            }
+        }
+        if (selectedAcc == null && !accounts.isEmpty()) {
+            selectedAcc = accounts.get(0);
+        }
+
+        int smtpP = (server != null && server.isRunning()) ? server.getSmtpPort() : MailConfig.LOCAL_SMTP_PORT;
+        int pop3P = (server != null && server.isRunning()) ? server.getPop3Port() : MailConfig.LOCAL_POP3_PORT;
+        String lanIp = MailServer.getLocalLanIp();
+        String email = selectedAcc != null ? selectedAcc.getEmail() : "alice@local.com";
+        String pass = selectedAcc != null ? selectedAcc.getPassword() : "123456";
+        String name = selectedAcc != null ? selectedAcc.getDisplayName() : "Alice Nguyễn";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== THÔNG SỐ KẾT NỐI MOZILLA THUNDERBIRD ===\n");
+        sb.append("Trạng thái Server : ").append((server != null && server.isRunning()) ? "ĐANG CHẠY" : "CHƯA KHỞI ĐỘNG").append("\n\n");
+        sb.append("1) Thông tin tài khoản:\n");
+        sb.append("   - Your full name      : ").append(name).append("\n");
+        sb.append("   - Email address       : ").append(email).append("\n");
+        sb.append("   - Password            : ").append(pass).append("\n\n");
+        sb.append("2) Chọn 'Configure manually' (Cấu hình thủ công) trong Thunderbird:\n");
+        sb.append("   [INCOMING SERVER - POP3]\n");
+        sb.append("   - Protocol            : POP3\n");
+        sb.append("   - Hostname            : localhost   (hoặc IP LAN nếu khác máy: ").append(lanIp).append(")\n");
+        sb.append("   - Port                : ").append(pop3P).append("\n");
+        sb.append("   - Connection security : None (Không mã hóa)\n");
+        sb.append("   - Authentication      : Normal password (Mật khẩu thông thường)\n");
+        sb.append("   - Username            : ").append(email).append("\n\n");
+        sb.append("   [OUTGOING SERVER - SMTP]\n");
+        sb.append("   - Hostname            : localhost   (hoặc IP LAN nếu khác máy: ").append(lanIp).append(")\n");
+        sb.append("   - Port                : ").append(smtpP).append("\n");
+        sb.append("   - Connection security : None (Không mã hóa)\n");
+        sb.append("   - Authentication      : Normal password (Mật khẩu thông thường)\n");
+        sb.append("   - Username            : ").append(email).append("\n\n");
+        sb.append("3) Lưu ý khi bấm 'Done':\n");
+        sb.append("   - Thunderbird sẽ cảnh báo kết nối không mã hóa (No Encryption) -> Tích 'I understand the risks' -> Confirm.\n");
+        sb.append("   - Server đã hỗ trợ đầy đủ: SMTP (EHLO, AUTH PLAIN/LOGIN, 8BITMIME, SMTPUTF8) & POP3 (CAPA, UIDL, TOP, AUTH PLAIN/LOGIN).\n");
+
+        String newText = sb.toString();
+        if (!newText.equals(tbInfoArea.getText())) {
+            tbInfoArea.setText(newText);
+            tbInfoArea.setCaretPosition(0);
+        }
+    }
+
+    private void runThunderbirdProtocolTest() {
+        if (server == null || !server.isRunning()) {
+            JOptionPane.showMessageDialog(this, "Vui lòng khởi động Mail Server trước khi kiểm tra!", "Thông Báo", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String selectedEmail = (String) tbAccountCombo.getSelectedItem();
+        if (selectedEmail == null) return;
+        MailAccount target = null;
+        for (MailAccount a : MailDatabaseManager.getInstance().getAllAccounts()) {
+            if (a.getEmail().equals(selectedEmail)) {
+                target = a;
+                break;
+            }
+        }
+        if (target == null) return;
+        final MailAccount acc = target;
+        final int smtpP = server.getSmtpPort();
+        final int pop3P = server.getPop3Port();
+
+        tbTestResultArea.setText("Đang kiểm tra bắt tay chuẩn Mozilla Thunderbird với tài khoản " + acc.getEmail() + "...\n");
+        new Thread(() -> {
+            StringBuilder out = new StringBuilder();
+            boolean smtpOk = false;
+            boolean pop3Ok = false;
+
+            // 1. Test SMTP EHLO + AUTH PLAIN
+            try (Socket s = new Socket("127.0.0.1", smtpP);
+                 BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedWriter w = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))) {
+                s.setSoTimeout(5000);
+                out.append("[SMTP] << ").append(r.readLine()).append("\n");
+                w.write("EHLO thunderbird.local\r\n");
+                w.flush();
+                String line;
+                boolean hasAuth = false;
+                while ((line = r.readLine()) != null) {
+                    out.append("[SMTP] << ").append(line).append("\n");
+                    if (line.toUpperCase().contains("AUTH") && line.toUpperCase().contains("PLAIN")) hasAuth = true;
+                    if (line.length() < 4 || line.charAt(3) != '-') break;
+                }
+                String plainToken = Base64.getEncoder().encodeToString(
+                        ("\0" + acc.getEmail() + "\0" + acc.getPassword()).getBytes(StandardCharsets.UTF_8));
+                w.write("AUTH PLAIN " + plainToken + "\r\n");
+                w.flush();
+                String authResp = r.readLine();
+                out.append("[SMTP] >> AUTH PLAIN ********\n[SMTP] << ").append(authResp).append("\n");
+                w.write("QUIT\r\n");
+                w.flush();
+                r.readLine();
+                smtpOk = hasAuth && authResp != null && authResp.startsWith("235");
+            } catch (Exception ex) {
+                out.append("[SMTP LỖI] ").append(ex.getMessage()).append("\n");
+            }
+
+            // 2. Test POP3 CAPA + AUTH PLAIN + UIDL + STAT
+            try (Socket s = new Socket("127.0.0.1", pop3P);
+                 BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedWriter w = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))) {
+                s.setSoTimeout(5000);
+                out.append("\n[POP3] << ").append(r.readLine()).append("\n");
+                w.write("CAPA\r\n");
+                w.flush();
+                String capLine;
+                boolean hasUidl = false;
+                while ((capLine = r.readLine()) != null) {
+                    out.append("[POP3] << ").append(capLine).append("\n");
+                    if ("UIDL".equalsIgnoreCase(capLine.trim())) hasUidl = true;
+                    if (".".equals(capLine)) break;
+                }
+                String plainToken = Base64.getEncoder().encodeToString(
+                        ("\0" + acc.getEmail() + "\0" + acc.getPassword()).getBytes(StandardCharsets.UTF_8));
+                w.write("AUTH PLAIN " + plainToken + "\r\n");
+                w.flush();
+                String authResp = r.readLine();
+                out.append("[POP3] >> AUTH PLAIN ********\n[POP3] << ").append(authResp).append("\n");
+
+                w.write("UIDL\r\n");
+                w.flush();
+                String uidlResp = r.readLine();
+                out.append("[POP3] >> UIDL\n[POP3] << ").append(uidlResp).append("\n");
+                if (uidlResp != null && uidlResp.startsWith("+OK")) {
+                    String uLine;
+                    while ((uLine = r.readLine()) != null) {
+                        out.append("   ").append(uLine).append("\n");
+                        if (".".equals(uLine)) break;
+                    }
+                }
+                w.write("QUIT\r\n");
+                w.flush();
+                r.readLine();
+                pop3Ok = hasUidl && authResp != null && authResp.startsWith("+OK") && uidlResp != null && uidlResp.startsWith("+OK");
+            } catch (Exception ex) {
+                out.append("[POP3 LỖI] ").append(ex.getMessage()).append("\n");
+            }
+
+            out.append("\n==> KẾT QUẢ: ")
+               .append((smtpOk && pop3Ok)
+                       ? "THÀNH CÔNG! Server sẵn sàng kết nối Mozilla Thunderbird (SMTP AUTH + POP3 CAPA/UIDL)."
+                       : "THẤT BẠI (SMTP=" + smtpOk + ", POP3=" + pop3Ok + ")");
+
+            SwingUtilities.invokeLater(() -> tbTestResultArea.setText(out.toString()));
+        }, "Thunderbird-Self-Test").start();
+    }
+
+    private void launchThunderbird() {
+        String[] paths = {
+                "C:\\Program Files\\Mozilla Thunderbird\\thunderbird.exe",
+                "C:\\Program Files (x86)\\Mozilla Thunderbird\\thunderbird.exe"
+        };
+        for (String p : paths) {
+            File f = new File(p);
+            if (f.exists()) {
+                try {
+                    new ProcessBuilder(p).start();
+                    return;
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(this, "Không thể mở Thunderbird: " + ex.getMessage(), "Lỗi", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
+        }
+        JOptionPane.showMessageDialog(this,
+                "Không tìm thấy Mozilla Thunderbird trên máy này.\n"
+                        + "Hãy tải & cài đặt tại https://www.thunderbird.net/ rồi nhập thông số ở bảng bên dưới!",
+                "Chưa Cài Thunderbird", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void loadAccountsToTable() {
@@ -271,6 +544,7 @@ public class MailServerGUI extends JFrame implements MailServer.MailServerListen
         for (MailAccount a : list) {
             accountTableModel.addRow(new Object[]{a.getEmail(), a.getDisplayName(), a.getPassword(), a.isEnabled() ? "Hoạt Động" : "Khóa"});
         }
+        refreshThunderbirdInfo();
     }
 
     private void loadEmailsToTable() {

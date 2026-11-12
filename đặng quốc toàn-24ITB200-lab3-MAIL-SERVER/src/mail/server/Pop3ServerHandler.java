@@ -8,10 +8,12 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
- * Xử lý phiên nhận thư theo giao thức POP3 (RFC 1939)
+ * Xử lý phiên nhận thư theo giao thức POP3 (RFC 1939, RFC 2449, RFC 5034)
+ * Hỗ trợ đầy đủ cả Java Mail Client lẫn Mozilla Thunderbird (CAPA, UIDL, TOP, AUTH PLAIN/LOGIN)
  */
 public class Pop3ServerHandler implements Runnable {
     private final Socket socket;
@@ -43,7 +45,11 @@ public class Pop3ServerHandler implements Runnable {
                 line = line.trim();
                 if (line.isEmpty()) continue;
 
-                server.log("[POP3 CMD từ " + clientIp + "]: " + (line.toUpperCase().startsWith("PASS") ? "PASS ********" : line));
+                String upperLine = line.toUpperCase();
+                String logLine = (upperLine.startsWith("PASS") || upperLine.startsWith("AUTH "))
+                        ? commandPrefix(line) + " ********"
+                        : line;
+                server.log("[POP3 CMD từ " + clientIp + "]: " + logLine);
                 if (handleCommand(line)) {
                     break;
                 }
@@ -68,6 +74,23 @@ public class Pop3ServerHandler implements Runnable {
         }
 
         switch (command) {
+            case "CAPA":
+                sendResponse("+OK Capability list follows");
+                writer.write("USER\r\n");
+                writer.write("UIDL\r\n");
+                writer.write("TOP\r\n");
+                writer.write("SASL PLAIN LOGIN\r\n");
+                writer.write("RESP-CODES\r\n");
+                writer.write("EXPIRE NEVER\r\n");
+                writer.write("IMPLEMENTATION JavaMailServer\r\n");
+                writer.write(".\r\n");
+                writer.flush();
+                break;
+
+            case "AUTH":
+                handleAuth(argument);
+                break;
+
             case "USER":
                 tempUser = argument;
                 sendResponse("+OK User accepted, please send password");
@@ -81,7 +104,7 @@ public class Pop3ServerHandler implements Runnable {
                 if (!checkAuth()) return false;
                 long totalBytes = 0;
                 for (EmailMessage m : userEmails) {
-                    if (!m.isDeleted()) totalBytes += m.getApproximateSize();
+                    if (!m.isDeleted()) totalBytes += m.getRfc822ByteSize();
                 }
                 int activeCount = getActiveMessageCount();
                 sendResponse("+OK " + activeCount + " " + totalBytes);
@@ -94,7 +117,7 @@ public class Pop3ServerHandler implements Runnable {
                     for (int i = 0; i < userEmails.size(); i++) {
                         EmailMessage m = userEmails.get(i);
                         if (!m.isDeleted()) {
-                            writer.write((i + 1) + " " + m.getApproximateSize() + "\r\n");
+                            writer.write((i + 1) + " " + m.getRfc822ByteSize() + "\r\n");
                         }
                     }
                     writer.write(".\r\n");
@@ -102,11 +125,38 @@ public class Pop3ServerHandler implements Runnable {
                 } else {
                     int idx = parseIndex(argument);
                     if (idx >= 0 && idx < userEmails.size() && !userEmails.get(idx).isDeleted()) {
-                        sendResponse("+OK " + (idx + 1) + " " + userEmails.get(idx).getApproximateSize());
+                        sendResponse("+OK " + (idx + 1) + " " + userEmails.get(idx).getRfc822ByteSize());
                     } else {
                         sendResponse("-ERR No such message");
                     }
                 }
+                break;
+
+            case "UIDL":
+                if (!checkAuth()) return false;
+                if (argument.isEmpty()) {
+                    sendResponse("+OK");
+                    for (int i = 0; i < userEmails.size(); i++) {
+                        EmailMessage m = userEmails.get(i);
+                        if (!m.isDeleted()) {
+                            writer.write((i + 1) + " " + m.getId() + "\r\n");
+                        }
+                    }
+                    writer.write(".\r\n");
+                    writer.flush();
+                } else {
+                    int uidlIdx = parseIndex(argument);
+                    if (uidlIdx >= 0 && uidlIdx < userEmails.size() && !userEmails.get(uidlIdx).isDeleted()) {
+                        sendResponse("+OK " + (uidlIdx + 1) + " " + userEmails.get(uidlIdx).getId());
+                    } else {
+                        sendResponse("-ERR No such message");
+                    }
+                }
+                break;
+
+            case "TOP":
+                if (!checkAuth()) return false;
+                handleTop(argument);
                 break;
 
             case "RETR":
@@ -116,14 +166,7 @@ public class Pop3ServerHandler implements Runnable {
                     EmailMessage m = userEmails.get(retrIdx);
                     String rfc822 = m.toRfc822String();
                     sendResponse("+OK " + rfc822.getBytes(StandardCharsets.UTF_8).length + " octets");
-                    String[] rfcLines = rfc822.split("\r?\n", -1);
-                    for (String rfcLine : rfcLines) {
-                        if (rfcLine.startsWith(".")) {
-                            writer.write("." + rfcLine + "\r\n");
-                        } else {
-                            writer.write(rfcLine + "\r\n");
-                        }
-                    }
+                    writeDotStuffedLines(rfc822.split("\r?\n", -1));
                     writer.write(".\r\n");
                     writer.flush();
                     m.setRead(true);
@@ -178,8 +221,74 @@ public class Pop3ServerHandler implements Runnable {
             sendResponse("-ERR USER first");
             return;
         }
+        authenticateAndOpenMailbox(tempUser, pass);
+    }
 
-        MailAccount acc = MailDatabaseManager.getInstance().authenticate(tempUser, pass);
+    private void handleAuth(String argument) throws IOException {
+        if (argument.isEmpty()) {
+            sendResponse("+OK List of supported mechanisms");
+            writer.write("PLAIN\r\n");
+            writer.write("LOGIN\r\n");
+            writer.write(".\r\n");
+            writer.flush();
+            return;
+        }
+
+        String[] parts = argument.split("\\s+", 2);
+        String mech = parts[0].toUpperCase();
+        String initial = parts.length > 1 ? parts[1].trim() : "";
+
+        if ("PLAIN".equals(mech)) {
+            if (initial.isEmpty()) {
+                sendResponse("+ ");
+                String next = reader.readLine();
+                if (next == null || "*".equals(next.trim())) {
+                    sendResponse("-ERR Authentication cancelled");
+                    return;
+                }
+                initial = next.trim();
+            }
+            try {
+                String payload = new String(Base64.getDecoder().decode(initial), StandardCharsets.UTF_8);
+                String[] authParts = payload.split("\0", -1);
+                String user = authParts.length >= 2 ? authParts[1] : "";
+                if (user.isEmpty() && authParts.length >= 1) user = authParts[0];
+                String pass = authParts.length >= 3 ? authParts[2] : (authParts.length == 2 ? authParts[1] : "");
+                authenticateAndOpenMailbox(user, pass);
+            } catch (Exception e) {
+                sendResponse("-ERR [AUTH] Invalid credentials");
+            }
+        } else if ("LOGIN".equals(mech)) {
+            try {
+                String userB64 = initial;
+                if (userB64.isEmpty()) {
+                    sendResponse("+ VXNlcm5hbWU6");
+                    String next = reader.readLine();
+                    if (next == null || "*".equals(next.trim())) {
+                        sendResponse("-ERR Authentication cancelled");
+                        return;
+                    }
+                    userB64 = next.trim();
+                }
+                sendResponse("+ UGFzc3dvcmQ6");
+                String passB64 = reader.readLine();
+                if (passB64 == null || "*".equals(passB64.trim())) {
+                    sendResponse("-ERR Authentication cancelled");
+                    return;
+                }
+                String user = new String(Base64.getDecoder().decode(userB64), StandardCharsets.UTF_8);
+                String pass = new String(Base64.getDecoder().decode(passB64.trim()), StandardCharsets.UTF_8);
+                authenticateAndOpenMailbox(user, pass);
+            } catch (Exception e) {
+                sendResponse("-ERR [AUTH] Invalid credentials");
+            }
+        } else {
+            sendResponse("-ERR Unsupported authentication mechanism");
+        }
+    }
+
+    private void authenticateAndOpenMailbox(String user, String pass) throws IOException {
+        MailAccount acc = MailDatabaseManager.getInstance().authenticate(user, pass);
         if (acc != null) {
             loggedInAccount = acc;
             userEmails = MailDatabaseManager.getInstance().getEmailsForRecipient(acc.getEmail());
@@ -187,9 +296,66 @@ public class Pop3ServerHandler implements Runnable {
             server.notifyStats();
             sendResponse("+OK Mailbox open, " + userEmails.size() + " messages");
         } else {
-            MailDatabaseManager.getInstance().logActivity("POP3", tempUser, "LOGIN_FAILED", "Sai mật khẩu", false);
-            sendResponse("-ERR Authentication failed");
+            MailDatabaseManager.getInstance().logActivity("POP3", user, "LOGIN_FAILED", "Sai mật khẩu", false);
+            sendResponse("-ERR [AUTH] Authentication failed");
         }
+    }
+
+    private void handleTop(String argument) throws IOException {
+        String[] parts = argument.trim().split("\\s+");
+        if (parts.length < 2) {
+            sendResponse("-ERR Usage: TOP <msg> <lines>");
+            return;
+        }
+        int idx = parseIndex(parts[0]);
+        int maxBodyLines;
+        try {
+            maxBodyLines = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            sendResponse("-ERR Invalid line count");
+            return;
+        }
+        if (maxBodyLines < 0 || idx < 0 || idx >= userEmails.size() || userEmails.get(idx).isDeleted()) {
+            sendResponse("-ERR No such message");
+            return;
+        }
+
+        String rfc822 = userEmails.get(idx).toRfc822String();
+        int sep = rfc822.indexOf("\r\n\r\n");
+        sendResponse("+OK top of message follows");
+        if (sep == -1) {
+            writeDotStuffedLines(rfc822.split("\r?\n", -1));
+        } else {
+            String headers = rfc822.substring(0, sep);
+            String body = rfc822.substring(sep + 4);
+            writeDotStuffedLines(headers.split("\r?\n", -1));
+            writer.write("\r\n");
+            if (maxBodyLines > 0 && !body.isEmpty()) {
+                String[] bodyLines = body.split("\r?\n", -1);
+                int limit = Math.min(maxBodyLines, bodyLines.length);
+                for (int i = 0; i < limit; i++) {
+                    String l = bodyLines[i];
+                    writer.write((l.startsWith(".") ? "." + l : l) + "\r\n");
+                }
+            }
+        }
+        writer.write(".\r\n");
+        writer.flush();
+    }
+
+    private void writeDotStuffedLines(String[] lines) throws IOException {
+        for (String l : lines) {
+            if (l.startsWith(".")) {
+                writer.write("." + l + "\r\n");
+            } else {
+                writer.write(l + "\r\n");
+            }
+        }
+    }
+
+    private String commandPrefix(String line) {
+        int sp = line.indexOf(' ');
+        return sp == -1 ? line.toUpperCase() : line.substring(0, sp).toUpperCase();
     }
 
     private boolean checkAuth() throws IOException {
