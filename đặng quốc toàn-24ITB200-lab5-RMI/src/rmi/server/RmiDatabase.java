@@ -54,9 +54,16 @@ public class RmiDatabase {
     private File resolveDataDir(String subDir) {
         File local = new File(subDir);
         if (local.exists()) return local;
-        File nested = new File("lap-trinh-mang/rmi-sync-app/" + subDir);
-        if (nested.exists() || new File("lap-trinh-mang/rmi-sync-app/src").exists()) {
-            return nested;
+        String[] prefixes = {
+            "đặng quốc toàn-24ITB200-lab5-RMI/",
+            "lap-trinh-mang/đặng quốc toàn-24ITB200-lab5-RMI/",
+            "lap-trinh-mang/rmi-sync-app/"
+        };
+        for (String prefix : prefixes) {
+            File candidate = new File(prefix + subDir);
+            if (candidate.exists() || new File(prefix + "src").exists()) {
+                return candidate;
+            }
         }
         return local;
     }
@@ -69,6 +76,8 @@ public class RmiDatabase {
 
         String[] possibleJars = {
             "lib/sqlite-jdbc-3.36.0.3.jar",
+            "đặng quốc toàn-24ITB200-lab5-RMI/lib/sqlite-jdbc-3.36.0.3.jar",
+            "lap-trinh-mang/đặng quốc toàn-24ITB200-lab5-RMI/lib/sqlite-jdbc-3.36.0.3.jar",
             "lap-trinh-mang/rmi-sync-app/lib/sqlite-jdbc-3.36.0.3.jar",
             "../chat-swing-app/lib/sqlite-jdbc-3.36.0.3.jar",
             "lap-trinh-mang/chat-swing-app/lib/sqlite-jdbc-3.36.0.3.jar"
@@ -190,6 +199,47 @@ public class RmiDatabase {
         return true;
     }
 
+    /**
+     * Chỉ chèn tài khoản mới nếu chưa tồn tại (nếu đã có thì bỏ qua).
+     */
+    public synchronized boolean putUserIfAbsent(RmiUser user) {
+        if (user == null || user.getUsername() == null || user.getUsername().trim().isEmpty()) return false;
+        String key = user.getUsername().trim().toLowerCase();
+        if (userMap.containsKey(key)) {
+            return false;
+        }
+        return putUser(user);
+    }
+
+    /**
+     * Quét bảng users trong SQLite để phát hiện tài khoản mới được INSERT trực tiếp từ bên ngoài.
+     */
+    public synchronized List<RmiUser> pollNewUsersFromSql() {
+        List<RmiUser> newlyInserted = new ArrayList<>();
+        if (!isSqlAvailable || sqlConnection == null) return newlyInserted;
+        try (Statement stmt = sqlConnection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT username, password, role, can_add, can_update, can_delete FROM users")) {
+            while (rs.next()) {
+                String uname = rs.getString("username");
+                if (uname == null) continue;
+                String key = uname.trim().toLowerCase();
+                if (!userMap.containsKey(key)) {
+                    RmiUser u = new RmiUser(
+                            key,
+                            rs.getString("password"),
+                            rs.getString("role"),
+                            rs.getInt("can_add") != 0,
+                            rs.getInt("can_update") != 0,
+                            rs.getInt("can_delete") != 0
+                    );
+                    userMap.put(key, u);
+                    newlyInserted.add(u);
+                }
+            }
+        } catch (SQLException ignored) {}
+        return newlyInserted;
+    }
+
     public synchronized boolean removeUser(String username) {
         if (username == null) return false;
         String key = username.trim().toLowerCase();
@@ -282,6 +332,51 @@ public class RmiDatabase {
         upsertSql(item);
         saveData();
         return true;
+    }
+
+    /**
+     * Chỉ chèn bản ghi mới nếu mã ID chưa tồn tại trong DB (nếu đã có thì bỏ qua).
+     */
+    public synchronized boolean putIfAbsent(RecordItem item) {
+        if (item == null || item.getId() == null) return false;
+        if (recordMap.containsKey(item.getId())) {
+            return false;
+        }
+        recordMap.put(item.getId(), item);
+        upsertSql(item);
+        saveData();
+        return true;
+    }
+
+    /**
+     * Quét bảng records trong SQLite để phát hiện bản ghi mới được INSERT trực tiếp từ bên ngoài.
+     */
+    public synchronized List<RecordItem> pollNewRecordsFromSql() {
+        List<RecordItem> newlyInserted = new ArrayList<>();
+        if (!isSqlAvailable || sqlConnection == null) return newlyInserted;
+        try (Statement stmt = sqlConnection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT id, name, category, value, last_modified, last_updated_by_server FROM records")) {
+            while (rs.next()) {
+                String id = rs.getString("id");
+                if (id != null && !recordMap.containsKey(id)) {
+                    RecordItem item = new RecordItem(
+                            id,
+                            rs.getString("name"),
+                            rs.getString("category"),
+                            rs.getDouble("value"),
+                            rs.getString("last_updated_by_server")
+                    );
+                    long lm = rs.getLong("last_modified");
+                    item.setLastModified(lm > 0 ? lm : System.currentTimeMillis());
+                    recordMap.put(id, item);
+                    newlyInserted.add(item);
+                }
+            }
+            if (!newlyInserted.isEmpty()) {
+                saveData();
+            }
+        } catch (SQLException ignored) {}
+        return newlyInserted;
     }
 
     public synchronized boolean remove(String id) {

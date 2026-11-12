@@ -402,11 +402,20 @@ public class RmiServerGUI extends JFrame implements DataSyncServiceImpl.SyncEven
                 Registry peerReg = LocateRegistry.getRegistry(peerHost, peerPort);
                 rmi.common.IDataSyncService peer = (rmi.common.IDataSyncService) peerReg.lookup("DataSyncService");
                 List<RecordItem> fullList = peer.requestFullSync();
+                int added = 0;
+                int skipped = 0;
                 if (fullList != null) {
                     for (RecordItem it : fullList) {
-                        service.syncReplicate("ADD", it, "FORCE_SYNC");
+                        if (service.getRecordById(it.getId()) == null) {
+                            service.syncReplicate("ADD", it, "FORCE_SYNC");
+                            added++;
+                        } else {
+                            skipped++;
+                        }
                     }
-                    JOptionPane.showMessageDialog(this, "Đã đồng bộ toàn bộ (" + fullList.size() + " bản ghi) từ Server đối tác!", "Thành Công", JOptionPane.INFORMATION_MESSAGE);
+                    JOptionPane.showMessageDialog(this,
+                            "Đã đồng bộ thêm " + added + " bản ghi mới (bỏ qua " + skipped + " bản ghi đã tồn tại)!",
+                            "Thành Công", JOptionPane.INFORMATION_MESSAGE);
                 }
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(this, "Không thể kết nối Server đối tác: " + ex.getMessage(), "Lỗi Đồng Bộ", JOptionPane.ERROR_MESSAGE);

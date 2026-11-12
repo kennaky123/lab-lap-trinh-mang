@@ -108,6 +108,13 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
     @Override
     public synchronized boolean syncUserReplicate(String action, RmiUser user, String senderServerId) throws RemoteException {
         if (serverId.equals(senderServerId) || user == null) return true;
+        if ("ADD_USER".equals(action)) {
+            if (db.putUserIfAbsent(user)) {
+                log("[ĐỒNG BỘ USER TỪ " + senderServerId + "] Đã thêm tài khoản mới: '" + user.getUsername() + "'");
+                notifyUsersChanged();
+            }
+            return true;
+        }
         log("[ĐỒNG BỘ USER TỪ " + senderServerId + "] Nhận lệnh: " + action + " cho tài khoản '" + user.getUsername() + "'");
         if ("SAVE_USER".equals(action)) {
             db.putUser(user);
@@ -215,19 +222,34 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
 
     @Override
     public synchronized boolean syncReplicate(String action, RecordItem item, String senderServerId) throws RemoteException {
-        if (serverId.equals(senderServerId)) {
+        if (serverId.equals(senderServerId) || item == null) {
             return true;
         }
 
-        log("[ĐỒNG BỘ RMI TỪ " + senderServerId + "] Nhận lệnh: " + action + " cho bản ghi " + item.getId());
-
-        if ("ADD".equals(action) || "UPDATE".equals(action)) {
-            db.put(item);
+        if ("ADD".equals(action)) {
+            if (db.putIfAbsent(item)) {
+                log("[ĐỒNG BỘ INSERT TỪ " + senderServerId + "] Đã chèn bản ghi mới " + item.getId() + " vào CSDL " + serverId);
+                notifyDataChanged();
+            } else {
+                log("[BỎ QUA - ĐÃ CÓ] Bản ghi " + item.getId() + " đã tồn tại trong CSDL " + serverId + ", không chèn lại.");
+            }
+            return true;
+        } else if ("UPDATE".equals(action)) {
+            RecordItem local = db.get(item.getId());
+            if (local == null || item.getLastModified() > local.getLastModified()) {
+                db.put(item);
+                log("[ĐỒNG BỘ UPDATE TỪ " + senderServerId + "] Đã cập nhật bản ghi " + item.getId());
+                notifyDataChanged();
+            }
+            return true;
         } else if ("DELETE".equals(action)) {
-            db.remove(item.getId());
+            if (db.remove(item.getId())) {
+                log("[ĐỒNG BỘ DELETE TỪ " + senderServerId + "] Đã xóa bản ghi " + item.getId());
+                notifyDataChanged();
+            }
+            return true;
         }
 
-        notifyDataChanged();
         return true;
     }
 
@@ -256,36 +278,65 @@ public class DataSyncServiceImpl extends UnicastRemoteObject implements IDataSyn
         Thread t = new Thread(() -> {
             while (true) {
                 try {
-                    Thread.sleep(3000);
+                    Thread.sleep(2000);
+
+                    // 1. Phát hiện dữ liệu mới được INSERT trực tiếp vào SQLite cục bộ
+                    List<RecordItem> localNewRecords = db.pollNewRecordsFromSql();
+                    if (!localNewRecords.isEmpty()) {
+                        log("[PHÁT HIỆN SQL INSERT] Có " + localNewRecords.size() + " bản ghi mới trong SQLite của " + serverId);
+                        notifyDataChanged();
+                    }
+                    List<RmiUser> localNewUsers = db.pollNewUsersFromSql();
+                    if (!localNewUsers.isEmpty()) {
+                        log("[PHÁT HIỆN SQL INSERT] Có " + localNewUsers.size() + " tài khoản mới trong SQLite của " + serverId);
+                        notifyUsersChanged();
+                    }
+
                     Registry reg = LocateRegistry.getRegistry(peerHost, peerPort);
                     IDataSyncService peer = (IDataSyncService) reg.lookup("DataSyncService");
                     boolean alive = peer.ping();
 
                     if (!isPeerOnline && alive) {
-                        log("[TỰ ĐỘNG PHÁT HIỆN] Peer Server (" + peerHost + ":" + peerPort + ") đã ONLINE trở lại!");
-                        log("[CATCH-UP SYNC] Đang kéo toàn bộ dữ liệu mới nhất từ Peer Server về...");
+                        log("[TỰ ĐỘNG PHÁT HIỆN] Peer Server (" + peerHost + ":" + peerPort + ") đã ONLINE!");
+                    }
 
-                        List<RecordItem> peerData = peer.requestFullSync();
-                        if (peerData != null && !peerData.isEmpty()) {
-                            for (RecordItem it : peerData) {
-                                RecordItem local = db.get(it.getId());
-                                if (local == null || it.getLastModified() > local.getLastModified()) {
-                                    db.put(it);
-                                }
+                    // Đẩy các bản ghi mới phát hiện trong SQLite cục bộ sang Peer (nếu Peer chưa có)
+                    for (RecordItem newIt : localNewRecords) {
+                        peer.syncReplicate("ADD", newIt, serverId);
+                    }
+                    for (RmiUser newU : localNewUsers) {
+                        peer.syncUserReplicate("ADD_USER", newU, serverId);
+                    }
+
+                    // 2. Kéo dữ liệu từ Peer Server: chỉ chèn những bản ghi/tài khoản chưa tồn tại
+                    List<RecordItem> peerData = peer.requestFullSync();
+                    if (peerData != null && !peerData.isEmpty()) {
+                        int addedCount = 0;
+                        for (RecordItem it : peerData) {
+                            if (db.putIfAbsent(it)) {
+                                addedCount++;
                             }
-                            notifyDataChanged();
-                            log("[HOÀN TẤT ĐỒNG BỘ] Đã đồng bộ bù thành công (" + db.count() + " bản ghi)");
                         }
-
-                        List<RmiUser> peerUsers = peer.getAllUsers();
-                        if (peerUsers != null) {
-                            for (RmiUser u : peerUsers) {
-                                db.putUser(u);
-                            }
-                            notifyUsersChanged();
-                            log("[HOÀN TẤT ĐỒNG BỘ USER] Đã đồng bộ bù thành công " + peerUsers.size() + " tài khoản SQLite");
+                        if (addedCount > 0) {
+                            notifyDataChanged();
+                            log("[ĐỒNG BỘ DB] Đã chèn thêm " + addedCount + " bản ghi mới từ Peer (bỏ qua bản ghi đã có).");
                         }
                     }
+
+                    List<RmiUser> peerUsers = peer.getAllUsers();
+                    if (peerUsers != null && !peerUsers.isEmpty()) {
+                        int addedUsers = 0;
+                        for (RmiUser u : peerUsers) {
+                            if (db.putUserIfAbsent(u)) {
+                                addedUsers++;
+                            }
+                        }
+                        if (addedUsers > 0) {
+                            notifyUsersChanged();
+                            log("[ĐỒNG BỘ USER DB] Đã chèn thêm " + addedUsers + " tài khoản mới từ Peer (bỏ qua tài khoản đã có).");
+                        }
+                    }
+
                     updatePeerStatus(alive);
                 } catch (Exception e) {
                     if (isPeerOnline) {
